@@ -10,13 +10,17 @@
 import { openDB } from "idb";
 
 const DB_NAME = "amihem_crm";
-const DB_VERSION = 1;
+const DB_VERSION = 3;
 
 export const STORES = {
   customers: "customers",
   products: "products",
   tickets: "tickets",
   followups: "followups",
+  calls: "calls",
+  inventory: "inventory",
+  collections: "collections",
+  visits: "visits",
 };
 
 let dbPromise;

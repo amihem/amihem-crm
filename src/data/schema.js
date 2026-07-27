@@ -73,6 +73,40 @@ export const FOLLOWUP_STATUS = [
   "Lost",
 ];
 
+// Scoring weights — rule-based, NOT ML. See utils/scoring.js
+export const SCORE_RULES = {
+  visitedRecently: 20, // activity (follow-up) within last 14 days
+  sampleApproved: 30,
+  trialOrder: 50,
+  bulkOrder: 100,
+  lost: -50,
+  inactive30Days: -20,
+};
+
+// Order-probability weights per ticket — also rule-based (see
+// utils/scoring.js -> ticketProbability). Expressed as % points added,
+// clamped to 0-95 (never claim certainty).
+export const PROBABILITY_RULES = {
+  base: 10,
+  garmentDeveloped: 15,
+  receivedByCustomer: 10,
+  stage: {
+    "Sample Sent": 0,
+    "Received": 5,
+    "Testing": 10,
+    "Approved": 30,
+    "Price Discussion": 35,
+    "Need Revised Sample": 5,
+    "Trial Order": 70,
+    "Bulk Order": 90,
+    "Rejected": 0,
+    "Lost": 0,
+  },
+  perRecentFollowUp: 5, // follow-up logged in last 14 days, max 3 counted
+};
+
+export const SEASONS = ["Spring/Summer", "Autumn/Winter", "Festive", "School Uniform", "Formal/Corporate"];
+
 // Shape reference (not enforced, just documentation):
 //
 // Customer { id, name, company, gst, city, state, country, buyerName,

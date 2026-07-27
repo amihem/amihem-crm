@@ -33,6 +33,13 @@ export function PriorityBadge({ priority }) {
   return <Badge tone={tone}>{priority}</Badge>;
 }
 
+export function TemperatureBadge({ temp }) {
+  const tone = temp === "Hot" ? "lost" : temp === "Warm" ? "medium" : "low";
+  // reuse rust for Hot (visually "hot"), thread for Warm, muted for Cold
+  const toneMap = { Hot: "high", Warm: "medium", Cold: "low" };
+  return <Badge tone={toneMap[temp] || "low"}>{temp}</Badge>;
+}
+
 export function Badge({ tone = "open", children }) {
   return (
     <span

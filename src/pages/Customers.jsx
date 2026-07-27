@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
-import { useCustomers } from "../context/domains.jsx";
-import { CustomerStatusBadge } from "../components/StatusBadge.jsx";
+import { Link } from "react-router-dom";
+import { useCustomers, useTickets, useFollowUps } from "../context/domains.jsx";
+import { useAuth } from "../context/AuthContext.jsx";
+import { CustomerStatusBadge, TemperatureBadge } from "../components/StatusBadge.jsx";
 import Modal from "../components/Modal.jsx";
 import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx";
 import { CUSTOMER_STATUS, CUSTOMER_CATEGORY } from "../data/schema";
+import { scoreCustomer, scoreTemperature } from "../utils/scoring";
 
 const BLANK = {
   name: "", company: "", city: "", state: "", country: "India",
@@ -13,6 +16,9 @@ const BLANK = {
 
 export default function Customers() {
   const { items: customers, save, remove } = useCustomers();
+  const { items: tickets } = useTickets();
+  const { items: followups } = useFollowUps();
+  const { permissions } = useAuth();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [editing, setEditing] = useState(null); // null=closed, {}=new, {...}=edit
@@ -64,15 +70,20 @@ export default function Customers() {
       </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {filtered.map((c) => (
+        {filtered.map((c) => {
+          const temp = scoreTemperature(scoreCustomer(c, tickets, followups));
+          return (
           <div key={c.id} className="bg-panel border border-line rounded-2xl p-4 flex flex-col gap-2 shadow-sm">
-            <div className="flex items-start justify-between gap-2">
+            <Link to={`/customers/${c.id}`} className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="font-display font-bold text-sm truncate">{c.name}</div>
                 <div className="text-xs text-muted truncate">{c.city}{c.state ? `, ${c.state}` : ""}</div>
               </div>
-              <CustomerStatusBadge status={c.status} />
-            </div>
+              <div className="flex flex-col items-end gap-1 shrink-0">
+                <CustomerStatusBadge status={c.status} />
+                <TemperatureBadge temp={temp} />
+              </div>
+            </Link>
             <div className="text-xs text-muted flex flex-col gap-0.5">
               {c.buyerName && <span>Buyer: {c.buyerName}</span>}
               {c.category && <span>{c.category}</span>}
@@ -91,15 +102,18 @@ export default function Customers() {
               <button onClick={() => setEditing(c)} className="text-xs font-semibold text-ink2 hover:underline">
                 Edit
               </button>
-              <button
-                onClick={() => { if (confirm(`Remove ${c.name}?`)) remove(c.id); }}
-                className="text-xs font-semibold text-rust hover:underline ml-auto"
-              >
-                Remove
-              </button>
+              {permissions?.canDelete && (
+                <button
+                  onClick={() => { if (confirm(`Remove ${c.name}?`)) remove(c.id); }}
+                  className="text-xs font-semibold text-rust hover:underline ml-auto"
+                >
+                  Remove
+                </button>
+              )}
             </div>
           </div>
-        ))}
+          );
+        })}
         {filtered.length === 0 && (
           <div className="col-span-full text-center py-12 text-muted text-sm">No customers match your search.</div>
         )}

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useProducts } from "../context/domains.jsx";
+import { useAuth } from "../context/AuthContext.jsx";
 import Modal from "../components/Modal.jsx";
 import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx";
 import { PRODUCT_CATEGORY } from "../data/schema";
@@ -11,6 +12,7 @@ const BLANK = {
 
 export default function Products() {
   const { items: products, save, remove } = useProducts();
+  const { permissions } = useAuth();
   const [editing, setEditing] = useState(null);
 
   return (
@@ -50,12 +52,14 @@ export default function Products() {
                 <td className="px-4 py-3 text-muted">₹{p.price}</td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
                   <button onClick={() => setEditing(p)} className="text-xs font-semibold text-ink2 hover:underline mr-3">Edit</button>
-                  <button
-                    onClick={() => { if (confirm(`Remove ${p.qualityName}?`)) remove(p.id); }}
-                    className="text-xs font-semibold text-rust hover:underline"
-                  >
-                    Remove
-                  </button>
+                  {permissions?.canDelete && (
+                    <button
+                      onClick={() => { if (confirm(`Remove ${p.qualityName}?`)) remove(p.id); }}
+                      className="text-xs font-semibold text-rust hover:underline"
+                    >
+                      Remove
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

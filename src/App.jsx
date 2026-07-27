@@ -1,14 +1,62 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import { HashRouter, Routes, Route } from "react-router-dom";
 import AppShell from "./components/AppShell.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Customers from "./pages/Customers.jsx";
+import CustomerDetail from "./pages/CustomerDetail.jsx";
 import Products from "./pages/Products.jsx";
 import Tickets from "./pages/Tickets.jsx";
 import Reports from "./pages/Reports.jsx";
+import Login from "./pages/Login.jsx";
 import { AppProviders } from "./context/domains.jsx";
+import { AuthProvider, useAuth } from "./context/AuthContext.jsx";
 import * as dataService from "./services/dataService";
 import { buildSeed } from "./data/seed";
+
+const Pipeline = lazy(() => import("./pages/Pipeline.jsx"));
+const Analytics = lazy(() => import("./pages/Analytics.jsx"));
+const Settings = lazy(() => import("./pages/Settings.jsx"));
+const Inventory = lazy(() => import("./pages/Inventory.jsx"));
+const Collections = lazy(() => import("./pages/Collections.jsx"));
+const RoutePlanner = lazy(() => import("./pages/RoutePlanner.jsx"));
+const More = lazy(() => import("./pages/More.jsx"));
+
+function PageLoader() {
+  return <div className="text-sm text-muted py-10 text-center">Loading…</div>;
+}
+
+function AuthedApp() {
+  const { session, loaded } = useAuth();
+
+  if (!loaded) return null;
+  if (!session) return <Login />;
+
+  return (
+    <AppProviders>
+      <HashRouter>
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/customers" element={<Customers />} />
+              <Route path="/customers/:id" element={<CustomerDetail />} />
+              <Route path="/products" element={<Products />} />
+              <Route path="/tickets" element={<Tickets />} />
+              <Route path="/pipeline" element={<Pipeline />} />
+              <Route path="/analytics" element={<Analytics />} />
+              <Route path="/reports" element={<Reports />} />
+              <Route path="/inventory" element={<Inventory />} />
+              <Route path="/collections" element={<Collections />} />
+              <Route path="/route-planner" element={<RoutePlanner />} />
+              <Route path="/more" element={<More />} />
+              <Route path="/settings" element={<Settings />} />
+            </Route>
+          </Routes>
+        </Suspense>
+      </HashRouter>
+    </AppProviders>
+  );
+}
 
 function App() {
   const [ready, setReady] = useState(false);
@@ -36,19 +84,9 @@ function App() {
   }
 
   return (
-    <AppProviders>
-      <HashRouter>
-        <Routes>
-          <Route element={<AppShell />}>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/customers" element={<Customers />} />
-            <Route path="/products" element={<Products />} />
-            <Route path="/tickets" element={<Tickets />} />
-            <Route path="/reports" element={<Reports />} />
-          </Route>
-        </Routes>
-      </HashRouter>
-    </AppProviders>
+    <AuthProvider>
+      <AuthedApp />
+    </AuthProvider>
   );
 }
 

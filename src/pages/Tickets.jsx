@@ -4,6 +4,7 @@ import Modal from "../components/Modal.jsx";
 import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
 import { formatDate, isOverdue, nextTicketNumber } from "../utils/helpers";
+import { ticketProbability } from "../utils/scoring";
 import { buildWhatsAppLink, getTemplateMessage, TEMPLATE_LABELS } from "../services/whatsapp";
 import {
   SAMPLE_TYPE, DISPATCH_MODE, TICKET_STAGES,
@@ -14,6 +15,7 @@ export default function Tickets() {
   const { items: customers } = useCustomers();
   const { items: products } = useProducts();
   const { items: tickets, save: saveTicket } = useTickets();
+  const { items: followups } = useFollowUps();
   const [stageFilter, setStageFilter] = useState("");
   const [newTicket, setNewTicket] = useState(null);
   const [openTicket, setOpenTicket] = useState(null);
@@ -32,7 +34,7 @@ export default function Tickets() {
     customerId: customers[0]?.id || "",
     productId: products[0]?.id || "",
     shade: "", quantity: "", unit: "meters", sampleType: "Cutting",
-    dispatchMode: "Courier", courierName: "", trackingNumber: "",
+    dispatchMode: "Courier", courierName: "", trackingNumber: "", courierCharges: "", podReceived: false,
     dispatchDate: "", expectedDelivery: "", received: false, garmentDeveloped: false,
     stage: "Sample Sent", remarks: "",
   });
@@ -82,6 +84,10 @@ export default function Tickets() {
                 </div>
                 <div className="font-display font-bold text-sm mt-1">{customerName(t.customerId)}</div>
                 <div className="text-xs text-muted mt-0.5">{productName(t.productId)} · {t.shade} · {formatDate(t.date)}</div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-xs text-muted">Order probability</div>
+                <div className="font-display font-bold text-sm text-thread">{ticketProbability(t, followups)}%</div>
               </div>
             </div>
           </button>
@@ -144,6 +150,8 @@ function TicketForm({ initial, customers, products, onSave, onCancel }) {
         <>
           <Field label="Courier Name"><TextInput value={form.courierName} onChange={set("courierName")} /></Field>
           <Field label="Tracking Number"><TextInput value={form.trackingNumber} onChange={set("trackingNumber")} /></Field>
+          <Field label="Courier Charges (₹)"><TextInput value={form.courierCharges} onChange={set("courierCharges")} /></Field>
+          <label className="flex items-center gap-2 text-sm mt-6"><input type="checkbox" checked={form.podReceived} onChange={setBool("podReceived")} /> POD received</label>
         </>
       )}
       <Field label="Dispatch Date"><TextInput type="date" value={form.dispatchDate} onChange={set("dispatchDate")} /></Field>
@@ -174,12 +182,29 @@ function TicketDetail({ ticket, customer, product, onStageChange }) {
     .filter((f) => f.ticketId === ticket.id)
     .sort((a, b) => new Date(b.date) - new Date(a.date));
 
+  const probability = ticketProbability(ticket, allFollowUps);
+
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-semibold">{customer?.name}</span>
-        <span className="text-xs text-muted">· {product?.qualityName} · {ticket.shade}</span>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <span className="text-sm font-semibold">{customer?.name}</span>
+          <span className="text-xs text-muted"> · {product?.qualityName} · {ticket.shade}</span>
+        </div>
+        <div className="text-right">
+          <div className="text-xs text-muted">Order probability</div>
+          <div className="font-display font-bold text-lg text-thread">{probability}%</div>
+        </div>
       </div>
+
+      {(ticket.courierName || ticket.trackingNumber) && (
+        <div className="text-xs text-muted bg-paper border border-line rounded-lg px-3 py-2 flex flex-wrap gap-x-4 gap-y-1">
+          {ticket.courierName && <span>Courier: {ticket.courierName}</span>}
+          {ticket.trackingNumber && <span>Tracking: {ticket.trackingNumber}</span>}
+          {ticket.courierCharges && <span>Charges: ₹{ticket.courierCharges}</span>}
+          <span>POD: {ticket.podReceived ? "Received" : "Pending"}</span>
+        </div>
+      )}
 
       <Field label="Stage">
         <Select options={TICKET_STAGES} value={ticket.stage} onChange={(e) => onStageChange(e.target.value)} />
