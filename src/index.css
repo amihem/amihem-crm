@@ -1,0 +1,13 @@
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+body { @apply bg-paper text-ink font-body antialiased; }
+h1, h2, h3, .font-display { font-family: 'Sora', sans-serif; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { @apply bg-line rounded-full; }
+
+*:focus-visible { outline: 2px solid #C9862D; outline-offset: 2px; }
