@@ -90,6 +90,11 @@ export default function Customers() {
               {c.preferredFabric && <span>Prefers: {c.preferredFabric}</span>}
             </div>
             <div className="flex gap-2 mt-1">
+              {c.phone && (
+                <a href={`tel:${c.phone.replace(/\D/g, "")}`} className="text-xs font-semibold text-ink2 hover:underline">
+                  Call
+                </a>
+              )}
               {c.whatsapp && (
                 <a
                   href={`https://wa.me/${c.whatsapp.replace(/\D/g, "")}`}

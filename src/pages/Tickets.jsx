@@ -210,6 +210,15 @@ function TicketDetail({ ticket, customer, product, onStageChange }) {
         <Select options={TICKET_STAGES} value={ticket.stage} onChange={(e) => onStageChange(e.target.value)} />
       </Field>
 
+      {customer?.phone && (
+        <a
+          href={`tel:${customer.phone.replace(/\D/g, "")}`}
+          className="text-xs font-semibold px-3 py-1.5 rounded-full bg-ink2/10 text-ink2 border border-ink2/30 hover:bg-ink2/20 w-fit"
+        >
+          Call {customer.buyerName || customer.name}
+        </a>
+      )}
+
       {customer?.whatsapp && (
         <div className="flex flex-wrap gap-2">
           {Object.entries(TEMPLATE_LABELS).map(([key, label]) => (

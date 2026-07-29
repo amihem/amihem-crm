@@ -99,6 +99,59 @@ internals, not a rewrite — same reasoning you already applied to
   /data         — schema.js (enums/shape reference), seed.js (demo data)
 ```
 
+## Switching to Supabase (cloud sync across devices)
+
+By default the app runs entirely on IndexedDB — offline, per-device, no
+login needed beyond a name. To get cross-device sync (same pattern you
+already use in `trdsls-app`), switch to Supabase:
+
+**1. Create the tables**
+In your Supabase project → SQL Editor, run `supabase/schema.sql` — creates
+one real table per store (`customers`, `products`, `tickets`,
+`followups`, `calls`, `inventory`, `collections`, `visits`) with proper
+columns, foreign keys (`tickets.customer_id → customers.id`,
+`followups.ticket_id → tickets.id`, etc.), and RLS so every row is scoped
+to `auth.uid()`. This is a real relational schema — you can query it
+directly in Supabase's Table Editor or SQL, not just through the app.
+
+**2. Set your env vars**
+```
+cp .env.example .env
+```
+Fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from Supabase →
+Project Settings → API.
+
+**3. That's it — nothing else changes**
+`dataService.js` auto-detects the env vars and routes every read/write to
+`supabaseBackend.js` instead of `indexedDbBackend.js`. `supabaseBackend.js`
+converts camelCase JS fields to snake_case columns automatically, so a
+"store" name (e.g. `tickets`) maps straight to a real table of the same
+name — no component, hook, or page needed to change.
+
+**One real change you'll notice:** the login screen switches from
+"name + role" to real email/password (Sign In / Create Account), because
+Supabase's Row Level Security needs an actual authenticated user to know
+whose data is whose. Role (Admin/Manager/Sales Executive) is still just a
+local UI preference layered on top — see `src/context/AuthContext.jsx`.
+
+**Files involved:**
+```
+src/services/supabaseClient.js    — client init, only active if env vars set
+src/services/supabaseBackend.js   — Supabase implementation (camelCase <-> snake_case, generic across all tables)
+src/services/supabaseAuth.js      — signUp/signIn/signOut/onAuthChange
+src/services/indexedDbBackend.js  — original IndexedDB implementation
+src/services/dataService.js       — router: picks backend automatically
+supabase/schema.sql               — run this once in Supabase SQL Editor
+.env.example                      — copy to .env with your project keys
+```
+
+**Migrating existing IndexedDB data to Supabase:** use Settings → Backup
+to export your current data as JSON first (works on either backend). Once
+you've switched to Supabase and signed in, importing that same JSON back
+via Settings → Restore will push it into Supabase instead — the restore
+function also goes through `dataService.js`, so it doesn't need to know
+which backend is active either.
+
 ## Not built yet
 Courier POD reconciliation reports and fabric-book-level batch tracking
 are intentionally kept simple (the fields exist, but there's no

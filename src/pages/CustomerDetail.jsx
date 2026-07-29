@@ -59,6 +59,14 @@ export default function CustomerDetail() {
           </p>
         </div>
         <div className="flex gap-2">
+          {customer.phone && (
+            <a
+              href={`tel:${customer.phone.replace(/\D/g, "")}`}
+              className="text-xs font-semibold px-3 py-2 rounded-lg bg-ink2/10 text-ink2 border border-ink2/30 hover:bg-ink2/20"
+            >
+              Call
+            </a>
+          )}
           {customer.whatsapp && (
             <a
               href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage("greeting", customer, {}))}
