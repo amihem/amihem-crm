@@ -1,0 +1,11 @@
+{
+  "remoteName": "origin",
+  "projects": [
+    {
+      "id": "prj_ptf60Yldodxpd7EZ7LO9ykRuLaDx",
+      "name": "amihem-crm",
+      "directory": ".",
+      "orgId": "team_34oRdksIamJdUDtuL9ncWkSO"
+    }
+  ]
+}

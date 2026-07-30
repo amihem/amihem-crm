@@ -63,13 +63,19 @@ function App() {
 
   useEffect(() => {
     (async () => {
-      const seeded = await dataService.isSeeded();
-      if (!seeded) {
-        const { customers, products, tickets, followups } = buildSeed();
-        await dataService.bulkPut(dataService.STORES.customers, customers);
-        await dataService.bulkPut(dataService.STORES.products, products);
-        await dataService.bulkPut(dataService.STORES.tickets, tickets);
-        await dataService.bulkPut(dataService.STORES.followups, followups);
+      // Demo-data seeding only makes sense for the local IndexedDB backend
+      // (each device starts empty). For Supabase, isSeeded()/bulkPut()
+      // need a signed-in user — which doesn't exist yet at this point,
+      // before the login screen even renders — so skip straight through.
+      if (dataService.activeBackend === "indexeddb") {
+        const seeded = await dataService.isSeeded();
+        if (!seeded) {
+          const { customers, products, tickets, followups } = buildSeed();
+          await dataService.bulkPut(dataService.STORES.customers, customers);
+          await dataService.bulkPut(dataService.STORES.products, products);
+          await dataService.bulkPut(dataService.STORES.tickets, tickets);
+          await dataService.bulkPut(dataService.STORES.followups, followups);
+        }
       }
       setReady(true);
     })();

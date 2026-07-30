@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext.jsx";
-import { useCustomers, useProducts } from "../context/domains.jsx";
+import { useCustomers, useProducts, useTickets, useFollowUps } from "../context/domains.jsx";
+import { activeBackend } from "../services/dataService";
+import { buildSeed } from "../data/seed";
 import {
   exportBackup, restoreBackup, parseSpreadsheet, mapCustomerRows, mapProductRows,
 } from "../services/backupImport";
@@ -9,6 +11,8 @@ export default function Settings() {
   const { session, logout } = useAuth();
   const { save: saveCustomer } = useCustomers();
   const { save: saveProduct } = useProducts();
+  const { save: saveTicket } = useTickets();
+  const { save: saveFollowUp } = useFollowUps();
 
   const restoreInputRef = useRef();
   const customerImportRef = useRef();
@@ -16,6 +20,22 @@ export default function Settings() {
 
   const [status, setStatus] = useState(null); // { type: 'ok'|'error', text }
   const [busy, setBusy] = useState(false);
+
+  const handleLoadDemoData = async () => {
+    setBusy(true);
+    try {
+      const { customers, products, tickets, followups } = buildSeed();
+      for (const c of customers) await saveCustomer(c);
+      for (const p of products) await saveProduct(p);
+      for (const t of tickets) await saveTicket(t);
+      for (const f of followups) await saveFollowUp(f);
+      setStatus({ type: "ok", text: "Demo data loaded." });
+    } catch (err) {
+      setStatus({ type: "error", text: err.message || "Could not load demo data." });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleRestore = async (e) => {
     const file = e.target.files?.[0];
@@ -75,6 +95,18 @@ export default function Settings() {
           Sign out
         </button>
       </SettingsCard>
+
+      {activeBackend === "supabase" && (
+        <SettingsCard title="Demo Data" desc="New Supabase accounts start empty (unlike the local IndexedDB version, which auto-seeds). Load a few sample records to explore the app.">
+          <button
+            onClick={handleLoadDemoData}
+            disabled={busy}
+            className="text-xs font-semibold px-3 py-2 rounded-lg bg-panel border border-line hover:bg-paper w-fit disabled:opacity-50"
+          >
+            Load Demo Data
+          </button>
+        </SettingsCard>
+      )}
 
       <SettingsCard title="Backup" desc="Download all your data as a single JSON file — keep it somewhere safe.">
         <button
