@@ -4,6 +4,10 @@
 const TEMPLATES = {
   sampleReminder: (c, t) =>
     `Hi ${c.buyerName || c.name}, following up on the ${t.shade || ""} sample (${t.ticketNumber}) we sent — could you share an update on how it's looking?`,
+  sampleReminderMulti: (c, tickets) => {
+    const list = tickets.map((t) => `${t.ticketNumber} (${t.shade || t.stage})`).join(", ");
+    return `Hi ${c.buyerName || c.name}, following up on the samples we sent — ${list}. Could you share feedback so we can move things forward?`;
+  },
   priceReminder: (c, t) =>
     `Hi ${c.buyerName || c.name}, checking in on the pricing discussion for ${t.ticketNumber}. Let us know if you'd like to move ahead.`,
   orderReminder: (c, t) =>
@@ -25,6 +29,10 @@ export function buildWhatsAppLink(phone, message) {
 export function getTemplateMessage(templateKey, customer, ticket) {
   const fn = TEMPLATES[templateKey];
   return fn ? fn(customer, ticket) : "";
+}
+
+export function getMultiSampleReminderMessage(customer, tickets) {
+  return TEMPLATES.sampleReminderMulti(customer, tickets);
 }
 
 export const TEMPLATE_LABELS = {

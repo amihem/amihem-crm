@@ -5,7 +5,7 @@ import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx"
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
 import { formatDate, isOverdue, nextTicketNumber } from "../utils/helpers";
 import { ticketProbability } from "../utils/scoring";
-import { buildWhatsAppLink, getTemplateMessage, TEMPLATE_LABELS } from "../services/whatsapp";
+import { buildWhatsAppLink, getTemplateMessage, getMultiSampleReminderMessage, TEMPLATE_LABELS } from "../services/whatsapp";
 import {
   SAMPLE_TYPE, DISPATCH_MODE, TICKET_STAGES,
   FOLLOWUP_MODE, FOLLOWUP_PRIORITY, FOLLOWUP_STATUS,
@@ -20,13 +20,30 @@ export default function Tickets() {
   const [newTicket, setNewTicket] = useState(null);
   const [openTicket, setOpenTicket] = useState(null);
 
-  const customerName = (id) => customers.find((c) => c.id === id)?.name || "—";
   const productName = (id) => products.find((p) => p.id === id)?.qualityName || "—";
 
   const filtered = useMemo(
     () => tickets.filter((t) => !stageFilter || t.stage === stageFilter),
     [tickets, stageFilter]
   );
+
+  // One row per CUSTOMER, with all their sample tickets nested inside —
+  // a customer often gets several qualities sampled at once, so a flat
+  // per-ticket list made it look like separate customers.
+  const groupedByCustomer = useMemo(() => {
+    const map = new Map();
+    filtered.forEach((t) => {
+      if (!map.has(t.customerId)) map.set(t.customerId, []);
+      map.get(t.customerId).push(t);
+    });
+    return Array.from(map.entries())
+      .map(([customerId, ticketsForCustomer]) => ({
+        customer: customers.find((c) => c.id === customerId),
+        tickets: ticketsForCustomer.sort((a, b) => new Date(b.date) - new Date(a.date)),
+      }))
+      .filter((g) => g.customer)
+      .sort((a, b) => new Date(b.tickets[0].date) - new Date(a.tickets[0].date));
+  }, [filtered, customers]);
 
   const blankTicket = () => ({
     ticketNumber: nextTicketNumber(tickets),
@@ -70,29 +87,65 @@ export default function Tickets() {
       </select>
 
       <div className="flex flex-col gap-3">
-        {filtered.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setOpenTicket(t)}
-            className="text-left bg-panel border border-line rounded-2xl p-4 hover:border-ink2/40 transition shadow-sm"
-          >
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-mono text-xs text-muted">{t.ticketNumber}</span>
-                  <StageBadge stage={t.stage} />
+        {groupedByCustomer.map(({ customer, tickets: customerTickets }) => {
+          const pendingCount = customerTickets.filter((t) => t.stage === "Sample Sent" || t.stage === "Received" || t.stage === "Testing").length;
+          return (
+            <div key={customer.id} className="bg-panel border border-line rounded-2xl p-4 shadow-sm flex flex-col gap-3">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <div className="font-display font-bold text-base">{customer.name}</div>
+                  <div className="text-xs text-muted mt-0.5">
+                    {customer.city} · {customerTickets.length} sample{customerTickets.length > 1 ? "s" : ""}
+                    {pendingCount > 0 && <span className="text-thread font-medium"> · {pendingCount} awaiting result</span>}
+                  </div>
                 </div>
-                <div className="font-display font-bold text-sm mt-1">{customerName(t.customerId)}</div>
-                <div className="text-xs text-muted mt-0.5">{productName(t.productId)} · {t.shade} · {formatDate(t.date)}</div>
+                <div className="flex gap-2 shrink-0">
+                  {customer.phone && (
+                    <a
+                      href={`tel:${customer.phone.replace(/\D/g, "")}`}
+                      className="text-xs font-semibold px-2.5 py-1.5 rounded-full bg-ink2/10 text-ink2 border border-ink2/30 hover:bg-ink2/20"
+                    >
+                      Call
+                    </a>
+                  )}
+                  {customer.whatsapp && (
+                    <a
+                      href={buildWhatsAppLink(customer.whatsapp, getMultiSampleReminderMessage(customer, customerTickets))}
+                      target="_blank" rel="noreferrer"
+                      className="text-xs font-semibold px-2.5 py-1.5 rounded-full bg-loom/10 text-loom border border-loom/30 hover:bg-loom/20"
+                    >
+                      Remind (WhatsApp)
+                    </a>
+                  )}
+                </div>
               </div>
-              <div className="text-right shrink-0">
-                <div className="text-xs text-muted">Order probability</div>
-                <div className="font-display font-bold text-sm text-thread">{ticketProbability(t, followups)}%</div>
+
+              <div className="flex flex-col divide-y divide-line -mx-1">
+                {customerTickets.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setOpenTicket(t)}
+                    className="text-left px-1 py-2.5 hover:bg-paper rounded-lg transition flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-xs text-muted">{t.ticketNumber}</span>
+                        <StageBadge stage={t.stage} />
+                      </div>
+                      <div className="text-sm font-medium mt-0.5">{productName(t.productId)} · {t.shade}</div>
+                      <div className="text-xs text-muted">{formatDate(t.date)}</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-[10px] text-muted uppercase tracking-wide">Probability</div>
+                      <div className="font-display font-bold text-sm text-thread">{ticketProbability(t, followups)}%</div>
+                    </div>
+                  </button>
+                ))}
               </div>
             </div>
-          </button>
-        ))}
-        {filtered.length === 0 && (
+          );
+        })}
+        {groupedByCustomer.length === 0 && (
           <div className="text-center py-12 text-muted text-sm">No tickets in this stage.</div>
         )}
       </div>

@@ -4,6 +4,7 @@ import { useCustomers, useProducts, useTickets, useFollowUps } from "../context/
 import KpiCard from "../components/KpiCard.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
 import { formatDate, isOverdue, isToday, daysBetween } from "../utils/helpers";
+import { buildWhatsAppLink, getTemplateMessage } from "../services/whatsapp";
 import { WON_STAGES, LOST_STAGES } from "../data/schema";
 
 export default function Dashboard() {
@@ -108,18 +109,37 @@ function Panel({ title, children, empty, accent }) {
 
 function FollowUpRow({ f, c, t, overdueDays }) {
   return (
-    <Link
-      to="/tickets"
-      className="flex items-center justify-between py-2.5 border-b border-line last:border-0 hover:bg-paper -mx-2 px-2 rounded gap-2"
-    >
-      <div className="min-w-0">
+    <div className="flex items-center justify-between py-2.5 border-b border-line last:border-0 gap-2">
+      <Link
+        to="/tickets"
+        className="min-w-0 flex-1 hover:bg-paper -mx-2 px-2 py-1 rounded"
+      >
         <div className="font-medium text-sm truncate">{c?.name || "Unknown customer"}</div>
         <div className="text-xs text-muted truncate">{t?.ticketNumber} · {f.discussion}</div>
-      </div>
-      <div className="flex flex-col items-end gap-1 shrink-0">
+      </Link>
+      <div className="flex items-center gap-1.5 shrink-0">
         <PriorityBadge priority={f.priority} />
-        {overdueDays > 0 && <span className="text-xs text-rust font-medium">{overdueDays}d overdue</span>}
+        {overdueDays > 0 && <span className="text-xs text-rust font-medium">{overdueDays}d</span>}
+        {c?.phone && (
+          <a
+            href={`tel:${c.phone.replace(/\D/g, "")}`}
+            title="Call"
+            className="w-7 h-7 flex items-center justify-center rounded-full bg-ink2/10 text-ink2 hover:bg-ink2/20 text-xs"
+          >
+            ☎
+          </a>
+        )}
+        {c?.whatsapp && (
+          <a
+            href={buildWhatsAppLink(c.whatsapp, getTemplateMessage("sampleReminder", c, t || {}))}
+            target="_blank" rel="noreferrer"
+            title="WhatsApp reminder"
+            className="w-7 h-7 flex items-center justify-center rounded-full bg-loom/10 text-loom hover:bg-loom/20 text-xs"
+          >
+            ✆
+          </a>
+        )}
       </div>
-    </Link>
+    </div>
   );
 }
