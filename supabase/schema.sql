@@ -95,6 +95,9 @@ create table if not exists public.tickets (
   garment_developed boolean default false,
   stage text,
   remarks text,
+  closure_note text,
+  order_value text,
+  closed_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -205,6 +208,12 @@ begin
     execute format('create policy "delete own rows" on public.%I for delete using (auth.uid() = user_id);', t);
   end loop;
 end $$;
+
+-- ---------- Migration: safe to re-run if you already applied an earlier
+-- version of this schema — adds any columns introduced since then ----------
+alter table public.tickets add column if not exists closure_note text;
+alter table public.tickets add column if not exists order_value text;
+alter table public.tickets add column if not exists closed_at timestamptz;
 
 -- ---------- Migrating from the old single-table (user_data) design ----------
 -- If you previously ran an earlier version of this file that created a

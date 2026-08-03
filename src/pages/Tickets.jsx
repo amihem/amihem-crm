@@ -3,12 +3,12 @@ import { useCustomers, useProducts, useTickets, useFollowUps, useAttachments } f
 import Modal from "../components/Modal.jsx";
 import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
-import { formatDate, isOverdue, nextTicketNumber } from "../utils/helpers";
+import { formatDate, isOverdue, nextTicketNumber, daysBetween } from "../utils/helpers";
 import { ticketProbability } from "../utils/scoring";
 import { compressImage } from "../utils/image";
 import { buildWhatsAppLink, getTemplateMessage, getMultiSampleReminderMessage, TEMPLATE_LABELS } from "../services/whatsapp";
 import {
-  SAMPLE_TYPE, DISPATCH_MODE, TICKET_STAGES,
+  SAMPLE_TYPE, DISPATCH_MODE, TICKET_STAGES, OPEN_STAGES, WON_STAGES, LOST_STAGES,
   FOLLOWUP_MODE, FOLLOWUP_PRIORITY, FOLLOWUP_STATUS,
 } from "../data/schema";
 
@@ -18,16 +18,32 @@ export default function Tickets() {
   const { items: tickets, save: saveTicket } = useTickets();
   const { items: followups } = useFollowUps();
   const [stageFilter, setStageFilter] = useState("");
+  const [queryFilter, setQueryFilter] = useState("open"); // open | closed | all
   const [newTicket, setNewTicket] = useState(null);
   const [openTicket, setOpenTicket] = useState(null);
   const [remindGroup, setRemindGroup] = useState(null); // { customer, tickets }
 
   const productName = (id) => products.find((p) => p.id === id)?.qualityName || "—";
 
-  const filtered = useMemo(
-    () => tickets.filter((t) => !stageFilter || t.stage === stageFilter),
-    [tickets, stageFilter]
-  );
+  // "Last touched" = most recent follow-up date, or the ticket's own date
+  // if no follow-up has ever been logged — this is what lets us flag a
+  // query as going stale even if nobody set an explicit next-follow-up.
+  const lastTouchedDate = (ticketId, ticketDate) => {
+    const ticketFollowUps = followups.filter((f) => f.ticketId === ticketId);
+    if (ticketFollowUps.length === 0) return ticketDate;
+    return ticketFollowUps.reduce((latest, f) => (f.date > latest ? f.date : latest), ticketFollowUps[0].date);
+  };
+
+  const filtered = useMemo(() => {
+    return tickets.filter((t) => {
+      const matchesStage = !stageFilter || t.stage === stageFilter;
+      const matchesQuery =
+        queryFilter === "all" ||
+        (queryFilter === "open" && OPEN_STAGES.includes(t.stage)) ||
+        (queryFilter === "closed" && !OPEN_STAGES.includes(t.stage));
+      return matchesStage && matchesQuery;
+    });
+  }, [tickets, stageFilter, queryFilter]);
 
   // One row per CUSTOMER, with all their sample tickets nested inside —
   // a customer often gets several qualities sampled at once, so a flat
@@ -44,8 +60,16 @@ export default function Tickets() {
         tickets: ticketsForCustomer.sort((a, b) => new Date(b.date) - new Date(a.date)),
       }))
       .filter((g) => g.customer)
-      .sort((a, b) => new Date(b.tickets[0].date) - new Date(a.tickets[0].date));
-  }, [filtered, customers]);
+      .sort((a, b) => {
+        if (queryFilter === "open") {
+          // Most neglected (oldest last-touch) open query rises to the top
+          const aOldest = Math.min(...a.tickets.map((t) => daysBetween(lastTouchedDate(t.id, t.date))));
+          const bOldest = Math.min(...b.tickets.map((t) => daysBetween(lastTouchedDate(t.id, t.date))));
+          return bOldest - aOldest;
+        }
+        return new Date(b.tickets[0].date) - new Date(a.tickets[0].date);
+      });
+  }, [filtered, customers, queryFilter]);
 
   const blankTicket = () => ({
     ticketNumber: nextTicketNumber(tickets),
@@ -79,14 +103,34 @@ export default function Tickets() {
         </p>
       )}
 
-      <select
-        value={stageFilter}
-        onChange={(e) => setStageFilter(e.target.value)}
-        className="border border-line rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-ink2 w-fit"
-      >
-        <option value="">All stages</option>
-        {TICKET_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
-      </select>
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex bg-panel border border-line rounded-lg p-0.5 w-fit">
+          {[
+            { key: "open", label: "Open Queries" },
+            { key: "closed", label: "Closed" },
+            { key: "all", label: "All" },
+          ].map((opt) => (
+            <button
+              key={opt.key}
+              onClick={() => setQueryFilter(opt.key)}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition ${
+                queryFilter === opt.key ? "bg-ink text-white" : "text-muted hover:text-ink"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        <select
+          value={stageFilter}
+          onChange={(e) => setStageFilter(e.target.value)}
+          className="border border-line rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-ink2 w-fit"
+        >
+          <option value="">All stages</option>
+          {TICKET_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
 
       <div className="flex flex-col gap-3">
         {groupedByCustomer.map(({ customer, tickets: customerTickets }) => {
@@ -122,26 +166,36 @@ export default function Tickets() {
               </div>
 
               <div className="flex flex-col divide-y divide-line -mx-1">
-                {customerTickets.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => setOpenTicket(t)}
-                    className="text-left px-1 py-2.5 hover:bg-paper rounded-lg transition flex items-center justify-between gap-3"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-xs text-muted">{t.ticketNumber}</span>
-                        <StageBadge stage={t.stage} />
+                {customerTickets.map((t) => {
+                  const staleDays = daysBetween(lastTouchedDate(t.id, t.date));
+                  const isOpenQuery = OPEN_STAGES.includes(t.stage);
+                  const isStale = isOpenQuery && staleDays >= 7;
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => setOpenTicket(t)}
+                      className={`text-left px-1 py-2.5 hover:bg-paper rounded-lg transition flex items-center justify-between gap-3 ${isStale ? "bg-rust/5" : ""}`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-xs text-muted">{t.ticketNumber}</span>
+                          <StageBadge stage={t.stage} />
+                          {isStale && (
+                            <span className="text-[10px] font-semibold text-rust bg-rust/10 border border-rust/30 rounded-full px-1.5 py-0.5">
+                              No contact {staleDays}d
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm font-medium mt-0.5">{productName(t.productId)} · {t.shade}</div>
+                        <div className="text-xs text-muted">{formatDate(t.date)}</div>
                       </div>
-                      <div className="text-sm font-medium mt-0.5">{productName(t.productId)} · {t.shade}</div>
-                      <div className="text-xs text-muted">{formatDate(t.date)}</div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className="text-[10px] text-muted uppercase tracking-wide">Probability</div>
-                      <div className="font-display font-bold text-sm text-thread">{ticketProbability(t, followups)}%</div>
-                    </div>
-                  </button>
-                ))}
+                      <div className="text-right shrink-0">
+                        <div className="text-[10px] text-muted uppercase tracking-wide">Probability</div>
+                        <div className="font-display font-bold text-sm text-thread">{ticketProbability(t, followups)}%</div>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           );
@@ -169,7 +223,7 @@ export default function Tickets() {
             ticket={tickets.find((t) => t.id === openTicket.id) || openTicket}
             customer={customers.find((c) => c.id === openTicket.customerId)}
             product={products.find((p) => p.id === openTicket.productId)}
-            onStageChange={async (stage) => saveTicket({ ...openTicket, stage })}
+            onUpdate={async (patch) => saveTicket({ ...openTicket, ...patch })}
           />
         )}
       </Modal>
@@ -287,12 +341,14 @@ function TicketForm({ initial, customers, products, onSave, onCancel }) {
   );
 }
 
-function TicketDetail({ ticket, customer, product, onStageChange }) {
+function TicketDetail({ ticket, customer, product, onUpdate }) {
   const { items: allFollowUps, save: saveFollowUp } = useFollowUps();
   const { items: allAttachments, save: saveAttachment, remove: removeAttachment } = useAttachments();
   const [addingFollowUp, setAddingFollowUp] = useState(false);
   const [waTemplate, setWaTemplate] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [closureNote, setClosureNote] = useState(ticket.closureNote || "");
+  const [orderValue, setOrderValue] = useState(ticket.orderValue || "");
 
   const followUps = allFollowUps
     .filter((f) => f.ticketId === ticket.id)
@@ -316,6 +372,23 @@ function TicketDetail({ ticket, customer, product, onStageChange }) {
   };
 
   const probability = ticketProbability(ticket, allFollowUps);
+  const isTerminalStage = WON_STAGES.includes(ticket.stage) || LOST_STAGES.includes(ticket.stage);
+  const isWon = WON_STAGES.includes(ticket.stage);
+
+  const handleStageChange = (stage) => {
+    // Moving into a terminal stage doesn't auto-close — the person still
+    // fills in the closure note below and hits "Close Query" so there's
+    // always a recorded reason, not just a silent dropdown change.
+    onUpdate({ stage });
+  };
+
+  const closeQuery = () => {
+    onUpdate({
+      closureNote,
+      orderValue: isWon ? orderValue : "",
+      closedAt: new Date().toISOString(),
+    });
+  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -324,10 +397,17 @@ function TicketDetail({ ticket, customer, product, onStageChange }) {
           <span className="text-sm font-semibold">{customer?.name}</span>
           <span className="text-xs text-muted"> · {product?.qualityName} · {ticket.shade}</span>
         </div>
-        <div className="text-right">
-          <div className="text-xs text-muted">Order probability</div>
-          <div className="font-display font-bold text-lg text-thread">{probability}%</div>
-        </div>
+        {!isTerminalStage && (
+          <div className="text-right">
+            <div className="text-xs text-muted">Order probability</div>
+            <div className="font-display font-bold text-lg text-thread">{probability}%</div>
+          </div>
+        )}
+        {isTerminalStage && (
+          <span className={`text-xs font-semibold rounded-full px-2.5 py-1 border ${isWon ? "bg-loom/10 text-loom border-loom/30" : "bg-rust/10 text-rust border-rust/30"}`}>
+            {ticket.closedAt ? "Query Closed" : "Needs Closure Note"}
+          </span>
+        )}
       </div>
 
       {(ticket.courierName || ticket.trackingNumber) && (
@@ -340,8 +420,31 @@ function TicketDetail({ ticket, customer, product, onStageChange }) {
       )}
 
       <Field label="Stage">
-        <Select options={TICKET_STAGES} value={ticket.stage} onChange={(e) => onStageChange(e.target.value)} />
+        <Select options={TICKET_STAGES} value={ticket.stage} onChange={(e) => handleStageChange(e.target.value)} />
       </Field>
+
+      {isTerminalStage && (
+        <div className={`border rounded-lg p-3 flex flex-col gap-2 ${isWon ? "border-loom/30 bg-loom/5" : "border-rust/30 bg-rust/5"}`}>
+          <div className="text-xs font-semibold">{isWon ? "Order won — close this query" : "Sample didn't convert — record why"}</div>
+          {isWon && (
+            <Field label="Order Value (₹, optional)">
+              <TextInput type="number" value={orderValue} onChange={(e) => setOrderValue(e.target.value)} placeholder="e.g. 45000" />
+            </Field>
+          )}
+          <Field label={isWon ? "Notes (quantity, terms, etc.)" : "Reason (shade/price/quality/timing…)"}>
+            <TextArea value={closureNote} onChange={(e) => setClosureNote(e.target.value)} rows={2} />
+          </Field>
+          <button
+            onClick={closeQuery}
+            className={`self-start text-xs font-semibold px-3 py-1.5 rounded-full text-white ${isWon ? "bg-loom" : "bg-rust"} hover:opacity-90`}
+          >
+            {ticket.closedAt ? "Update Closure" : "Close Query"}
+          </button>
+          {ticket.closedAt && (
+            <div className="text-[10px] text-muted">Closed {formatDate(ticket.closedAt)}</div>
+          )}
+        </div>
+      )}
 
       {customer?.phone && (
         <a

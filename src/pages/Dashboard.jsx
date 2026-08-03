@@ -5,7 +5,7 @@ import KpiCard from "../components/KpiCard.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
 import { formatDate, isOverdue, isToday, daysBetween } from "../utils/helpers";
 import { buildWhatsAppLink, getTemplateMessage } from "../services/whatsapp";
-import { WON_STAGES, LOST_STAGES, LOW_STOCK_THRESHOLD } from "../data/schema";
+import { WON_STAGES, LOST_STAGES, LOW_STOCK_THRESHOLD, OPEN_STAGES } from "../data/schema";
 
 export default function Dashboard() {
   const { items: customers } = useCustomers();
@@ -30,7 +30,21 @@ export default function Dashboard() {
     const todaysFollowups = followups.filter((f) => isToday(f.nextFollowUpDate));
     const overdueFollowups = followups.filter((f) => isOverdue(f.nextFollowUpDate));
 
-    return { won, lost, pendingSamples, conversion, todaysFollowups, overdueFollowups };
+    // Open queries nobody has touched in 7+ days — catches samples that
+    // never had a next-follow-up date set at all, not just ones that did.
+    const staleOpenTickets = tickets
+      .filter((t) => OPEN_STAGES.includes(t.stage))
+      .map((t) => {
+        const ticketFollowUps = followups.filter((f) => f.ticketId === t.id);
+        const lastTouch = ticketFollowUps.length
+          ? ticketFollowUps.reduce((latest, f) => (f.date > latest ? f.date : latest), ticketFollowUps[0].date)
+          : t.date;
+        return { ticket: t, days: daysBetween(lastTouch) };
+      })
+      .filter((x) => x.days >= 7)
+      .sort((a, b) => b.days - a.days);
+
+    return { won, lost, pendingSamples, conversion, todaysFollowups, overdueFollowups, staleOpenTickets };
   }, [tickets, followups]);
 
   const ticketById = (id) => tickets.find((t) => t.id === id);
@@ -72,6 +86,37 @@ export default function Dashboard() {
           })}
         </Panel>
       </div>
+
+      {stats.staleOpenTickets.length > 0 && (
+        <Panel title="Open Queries Going Stale (7+ days, no contact)" accent="rust">
+          {stats.staleOpenTickets.slice(0, 8).map(({ ticket: t, days }) => {
+            const c = customers.find((cc) => cc.id === t.customerId);
+            return (
+              <div key={t.id} className="flex items-center justify-between py-2.5 border-b border-line last:border-0 gap-2">
+                <Link to="/tickets" className="min-w-0 flex-1 hover:bg-paper -mx-2 px-2 py-1 rounded">
+                  <div className="font-medium text-sm truncate">{c?.name || "Unknown customer"}</div>
+                  <div className="text-xs text-muted truncate">{t.ticketNumber} · {productName(t.productId)} · {t.stage}</div>
+                </Link>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-xs text-rust font-semibold">{days}d</span>
+                  {c?.phone && (
+                    <a href={`tel:${c.phone.replace(/\D/g, "")}`} className="w-7 h-7 flex items-center justify-center rounded-full bg-ink2/10 text-ink2 text-xs">☎</a>
+                  )}
+                  {c?.whatsapp && (
+                    <a
+                      href={buildWhatsAppLink(c.whatsapp, getTemplateMessage("sampleReminder", c, t))}
+                      target="_blank" rel="noreferrer"
+                      className="w-7 h-7 flex items-center justify-center rounded-full bg-loom/10 text-loom text-xs"
+                    >
+                      ✆
+                    </a>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </Panel>
+      )}
 
       {lowStockItems.length > 0 && (
         <Panel title="Low Stock — Fabric Book & Hangers" accent="rust">
