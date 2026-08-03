@@ -10,4 +10,5 @@ export const STORES = {
   inventory: "inventory",
   collections: "collections",
   visits: "visits",
+  attachments: "attachments",
 };

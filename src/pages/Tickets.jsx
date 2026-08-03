@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import { useCustomers, useProducts, useTickets, useFollowUps } from "../context/domains.jsx";
+import { useCustomers, useProducts, useTickets, useFollowUps, useAttachments } from "../context/domains.jsx";
 import Modal from "../components/Modal.jsx";
 import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
 import { formatDate, isOverdue, nextTicketNumber } from "../utils/helpers";
 import { ticketProbability } from "../utils/scoring";
+import { compressImage } from "../utils/image";
 import { buildWhatsAppLink, getTemplateMessage, getMultiSampleReminderMessage, TEMPLATE_LABELS } from "../services/whatsapp";
 import {
   SAMPLE_TYPE, DISPATCH_MODE, TICKET_STAGES,
@@ -19,6 +20,7 @@ export default function Tickets() {
   const [stageFilter, setStageFilter] = useState("");
   const [newTicket, setNewTicket] = useState(null);
   const [openTicket, setOpenTicket] = useState(null);
+  const [remindGroup, setRemindGroup] = useState(null); // { customer, tickets }
 
   const productName = (id) => products.find((p) => p.id === id)?.qualityName || "—";
 
@@ -88,7 +90,7 @@ export default function Tickets() {
 
       <div className="flex flex-col gap-3">
         {groupedByCustomer.map(({ customer, tickets: customerTickets }) => {
-          const pendingCount = customerTickets.filter((t) => t.stage === "Sample Sent" || t.stage === "Received" || t.stage === "Testing").length;
+          const pendingCount = customerTickets.filter((t) => ["Sample Sent", "Received", "Testing", "Need Revised Sample"].includes(t.stage)).length;
           return (
             <div key={customer.id} className="bg-panel border border-line rounded-2xl p-4 shadow-sm flex flex-col gap-3">
               <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -109,13 +111,12 @@ export default function Tickets() {
                     </a>
                   )}
                   {customer.whatsapp && (
-                    <a
-                      href={buildWhatsAppLink(customer.whatsapp, getMultiSampleReminderMessage(customer, customerTickets))}
-                      target="_blank" rel="noreferrer"
+                    <button
+                      onClick={() => setRemindGroup({ customer, tickets: customerTickets })}
                       className="text-xs font-semibold px-2.5 py-1.5 rounded-full bg-loom/10 text-loom border border-loom/30 hover:bg-loom/20"
                     >
                       Remind (WhatsApp)
-                    </a>
+                    </button>
                   )}
                 </div>
               </div>
@@ -172,6 +173,66 @@ export default function Tickets() {
           />
         )}
       </Modal>
+
+      <Modal open={!!remindGroup} onClose={() => setRemindGroup(null)} title={`Remind ${remindGroup?.customer?.name || ""}`}>
+        {remindGroup && (
+          <ReminderPicker
+            group={remindGroup}
+            productName={productName}
+            onClose={() => setRemindGroup(null)}
+          />
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+function ReminderPicker({ group, productName, onClose }) {
+  const { customer, tickets } = group;
+  const PENDING_STAGES = ["Sample Sent", "Received", "Testing", "Need Revised Sample"];
+  const [selected, setSelected] = useState(
+    new Set(tickets.filter((t) => PENDING_STAGES.includes(t.stage)).map((t) => t.id))
+  );
+
+  const toggle = (id) => {
+    const next = new Set(selected);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelected(next);
+  };
+
+  const selectedTickets = tickets.filter((t) => selected.has(t.id));
+
+  const send = () => {
+    if (selectedTickets.length === 0) return;
+    const message = getMultiSampleReminderMessage(customer, selectedTickets);
+    window.open(buildWhatsAppLink(customer.whatsapp, message), "_blank");
+    onClose();
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-xs text-muted">Pick which samples to ask feedback on — this builds one WhatsApp message listing just those.</p>
+      <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
+        {tickets.map((t) => (
+          <label key={t.id} className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-paper text-sm">
+            <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggle(t.id)} />
+            <div className="min-w-0 flex-1">
+              <div className="font-medium">{productName(t.productId)} {t.shade && `· ${t.shade}`}</div>
+              <div className="text-xs text-muted">{t.ticketNumber} · {t.stage}</div>
+            </div>
+          </label>
+        ))}
+      </div>
+      <div className="flex justify-end gap-2 mt-1">
+        <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Cancel</button>
+        <button
+          onClick={send}
+          disabled={selectedTickets.length === 0}
+          className="px-4 py-2 rounded-lg text-sm font-semibold bg-loom text-white hover:opacity-90 disabled:opacity-40"
+        >
+          Send via WhatsApp ({selectedTickets.length})
+        </button>
+      </div>
     </div>
   );
 }
@@ -228,12 +289,31 @@ function TicketForm({ initial, customers, products, onSave, onCancel }) {
 
 function TicketDetail({ ticket, customer, product, onStageChange }) {
   const { items: allFollowUps, save: saveFollowUp } = useFollowUps();
+  const { items: allAttachments, save: saveAttachment, remove: removeAttachment } = useAttachments();
   const [addingFollowUp, setAddingFollowUp] = useState(false);
   const [waTemplate, setWaTemplate] = useState(null);
+  const [uploading, setUploading] = useState(false);
 
   const followUps = allFollowUps
     .filter((f) => f.ticketId === ticket.id)
     .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const attachments = allAttachments
+    .filter((a) => a.ticketId === ticket.id)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  const handleUpload = async (e, label) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const dataUrl = await compressImage(file);
+      await saveAttachment({ ticketId: ticket.id, label, dataUrl });
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  };
 
   const probability = ticketProbability(ticket, allFollowUps);
 
@@ -324,7 +404,42 @@ function TicketDetail({ ticket, customer, product, onStageChange }) {
           )}
         </div>
       </div>
+
+      <div>
+        <h4 className="font-display font-bold text-sm mb-2">Photos ({attachments.length})</h4>
+        <div className="flex flex-wrap gap-2 mb-3">
+          <UploadButton label="Garment Photo" onChange={(e) => handleUpload(e, "Garment Photo")} uploading={uploading} />
+          <UploadButton label="Dispatch Photo" onChange={(e) => handleUpload(e, "Dispatch Photo")} uploading={uploading} />
+          <UploadButton label="Other" onChange={(e) => handleUpload(e, "Other")} uploading={uploading} />
+        </div>
+        {attachments.length > 0 && (
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+            {attachments.map((a) => (
+              <div key={a.id} className="relative group">
+                <img src={a.dataUrl} alt={a.label} className="w-full aspect-square object-cover rounded-lg border border-line" />
+                <div className="absolute inset-x-0 bottom-0 bg-ink/70 text-white text-[10px] px-1.5 py-1 rounded-b-lg truncate">{a.label}</div>
+                <button
+                  onClick={() => { if (confirm("Remove this photo?")) removeAttachment(a.id); }}
+                  className="absolute top-1 right-1 w-5 h-5 rounded-full bg-ink/70 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
+                  aria-label="Remove photo"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+function UploadButton({ label, onChange, uploading }) {
+  return (
+    <label className="text-xs font-semibold px-3 py-1.5 rounded-full bg-panel border border-line hover:bg-paper cursor-pointer">
+      {uploading ? "Uploading…" : `+ ${label}`}
+      <input type="file" accept="image/*" capture="environment" onChange={onChange} disabled={uploading} className="hidden" />
+    </label>
   );
 }
 

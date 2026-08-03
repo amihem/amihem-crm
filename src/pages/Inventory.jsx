@@ -3,6 +3,7 @@ import { useInventory, useProducts } from "../context/domains.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import Modal from "../components/Modal.jsx";
 import { Field, TextInput, Select } from "../components/FormField.jsx";
+import { LOW_STOCK_THRESHOLD } from "../data/schema";
 
 const ITEM_TYPES = ["Sample Book", "Hanger", "Shade Card", "Cut Piece"];
 
@@ -15,6 +16,7 @@ export default function Inventory() {
   const [editing, setEditing] = useState(null);
 
   const productName = (id) => products.find((p) => p.id === id)?.qualityName || "—";
+  const lowStockCount = inventory.filter((i) => Number(i.quantity) <= LOW_STOCK_THRESHOLD).length;
 
   return (
     <div className="flex flex-col gap-5">
@@ -32,6 +34,12 @@ export default function Inventory() {
         </button>
       </div>
 
+      {lowStockCount > 0 && (
+        <p className="text-xs text-rust bg-rust/10 border border-rust/30 rounded-lg px-3 py-2">
+          {lowStockCount} item{lowStockCount > 1 ? "s" : ""} at or below {LOW_STOCK_THRESHOLD} in stock — restock soon.
+        </p>
+      )}
+
       <div className="overflow-x-auto bg-panel border border-line rounded-2xl">
         <table className="w-full text-sm">
           <thead>
@@ -45,23 +53,29 @@ export default function Inventory() {
             </tr>
           </thead>
           <tbody>
-            {inventory.map((i) => (
-              <tr key={i.id} className="border-b border-line last:border-0 hover:bg-paper">
-                <td className="px-4 py-3 font-medium">{productName(i.productId)}</td>
-                <td className="px-4 py-3 text-muted">{i.itemType}</td>
-                <td className="px-4 py-3 text-muted">{i.shade}</td>
-                <td className="px-4 py-3 text-muted">{i.quantity}</td>
-                <td className="px-4 py-3 text-muted">{i.location}</td>
-                <td className="px-4 py-3 text-right whitespace-nowrap">
-                  <button onClick={() => setEditing(i)} className="text-xs font-semibold text-ink2 hover:underline mr-3">Edit</button>
-                  {permissions?.canDelete && (
-                    <button onClick={() => { if (confirm("Remove this item?")) remove(i.id); }} className="text-xs font-semibold text-rust hover:underline">
-                      Remove
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {inventory.map((i) => {
+              const low = Number(i.quantity) <= LOW_STOCK_THRESHOLD;
+              return (
+                <tr key={i.id} className={`border-b border-line last:border-0 hover:bg-paper ${low ? "bg-rust/5" : ""}`}>
+                  <td className="px-4 py-3 font-medium">{productName(i.productId)}</td>
+                  <td className="px-4 py-3 text-muted">{i.itemType}</td>
+                  <td className="px-4 py-3 text-muted">{i.shade}</td>
+                  <td className="px-4 py-3">
+                    <span className={low ? "text-rust font-semibold" : "text-muted"}>{i.quantity}</span>
+                    {low && <span className="ml-1.5 text-[10px] font-semibold text-rust bg-rust/10 border border-rust/30 rounded-full px-1.5 py-0.5">LOW</span>}
+                  </td>
+                  <td className="px-4 py-3 text-muted">{i.location}</td>
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <button onClick={() => setEditing(i)} className="text-xs font-semibold text-ink2 hover:underline mr-3">Edit</button>
+                    {permissions?.canDelete && (
+                      <button onClick={() => { if (confirm("Remove this item?")) remove(i.id); }} className="text-xs font-semibold text-rust hover:underline">
+                        Remove
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
             {inventory.length === 0 && (
               <tr><td colSpan={6} className="px-4 py-10 text-center text-muted">No inventory logged yet.</td></tr>
             )}

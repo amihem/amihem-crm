@@ -175,12 +175,28 @@ create table if not exists public.visits (
 );
 create index if not exists visits_user_idx on public.visits (user_id);
 
+-- ---------- attachments (garment/dispatch photos on tickets) ----------
+-- data_url stores a compressed base64 JPEG (resized client-side before
+-- upload) — simplest path with no separate file-storage setup. If volume
+-- grows large, migrate to Supabase Storage and keep only a URL here.
+create table if not exists public.attachments (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  ticket_id uuid references public.tickets(id) on delete cascade,
+  label text,
+  data_url text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists attachments_user_idx on public.attachments (user_id);
+create index if not exists attachments_ticket_idx on public.attachments (ticket_id);
+
 -- ---------- Row Level Security: every user sees/edits only their own rows ----------
 do $$
 declare
   t text;
 begin
-  for t in select unnest(array['customers','products','tickets','followups','calls','inventory','collections','visits'])
+  for t in select unnest(array['customers','products','tickets','followups','calls','inventory','collections','visits','attachments'])
   loop
     execute format('alter table public.%I enable row level security;', t);
     execute format('create policy "select own rows" on public.%I for select using (auth.uid() = user_id);', t);

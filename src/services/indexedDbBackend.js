@@ -6,7 +6,7 @@ import { openDB } from "idb";
 import { STORES } from "./stores";
 
 const DB_NAME = "amihem_crm";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise;
 

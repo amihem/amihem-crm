@@ -107,6 +107,10 @@ export const PROBABILITY_RULES = {
 
 export const SEASONS = ["Spring/Summer", "Autumn/Winter", "Festive", "School Uniform", "Formal/Corporate"];
 
+// Below this quantity, an inventory item is flagged as low stock
+// (Dashboard + Inventory page both use this).
+export const LOW_STOCK_THRESHOLD = 2;
+
 // Shape reference (not enforced, just documentation):
 //
 // Customer { id, name, company, gst, city, state, country, buyerName,

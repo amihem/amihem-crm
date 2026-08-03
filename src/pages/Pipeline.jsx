@@ -3,6 +3,7 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { useCustomers, useProducts, useTickets } from "../context/domains.jsx";
 import { TICKET_STAGES, WON_STAGES, LOST_STAGES } from "../data/schema";
 import { formatDate } from "../utils/helpers";
+import { buildWhatsAppLink, getTemplateMessage } from "../services/whatsapp";
 
 const STAGE_TEXT = { loom: "text-loom", rust: "text-rust", ink: "text-muted" };
 
@@ -13,6 +14,7 @@ export default function Pipeline() {
 
   const customerName = (id) => customers.find((c) => c.id === id)?.name || "—";
   const productName = (id) => products.find((p) => p.id === id)?.qualityName || "—";
+  const customerById = (id) => customers.find((c) => c.id === id);
 
   const columns = useMemo(() => {
     const map = {};
@@ -61,21 +63,46 @@ export default function Pipeline() {
                     <div className="flex flex-col gap-2 min-h-[40px]">
                       {columns[stage].map((t, idx) => (
                         <Draggable draggableId={t.id} index={idx} key={t.id}>
-                          {(dragProvided, dragSnapshot) => (
-                            <div
-                              ref={dragProvided.innerRef}
-                              {...dragProvided.draggableProps}
-                              {...dragProvided.dragHandleProps}
-                              className={`bg-white border border-line rounded-xl p-3 text-xs shadow-sm ${
-                                dragSnapshot.isDragging ? "shadow-lg" : ""
-                              }`}
-                            >
-                              <div className="font-mono text-[10px] text-muted">{t.ticketNumber}</div>
-                              <div className="font-semibold text-sm mt-0.5 truncate">{customerName(t.customerId)}</div>
-                              <div className="text-muted mt-0.5 truncate">{productName(t.productId)} · {t.shade}</div>
-                              <div className="text-muted mt-1">{formatDate(t.date)}</div>
-                            </div>
-                          )}
+                          {(dragProvided, dragSnapshot) => {
+                            const c = customerById(t.customerId);
+                            return (
+                              <div
+                                ref={dragProvided.innerRef}
+                                {...dragProvided.draggableProps}
+                                className={`bg-white border border-line rounded-xl p-3 text-xs shadow-sm ${
+                                  dragSnapshot.isDragging ? "shadow-lg" : ""
+                                }`}
+                              >
+                                <div {...dragProvided.dragHandleProps}>
+                                  <div className="font-mono text-[10px] text-muted">{t.ticketNumber}</div>
+                                  <div className="font-semibold text-sm mt-0.5 truncate">{customerName(t.customerId)}</div>
+                                  <div className="text-muted mt-0.5 truncate">{productName(t.productId)} · {t.shade}</div>
+                                  <div className="text-muted mt-1">{formatDate(t.date)}</div>
+                                </div>
+                                {(c?.phone || c?.whatsapp) && (
+                                  <div className="flex gap-1.5 mt-2 pt-2 border-t border-line">
+                                    {c?.phone && (
+                                      <a
+                                        href={`tel:${c.phone.replace(/\D/g, "")}`}
+                                        className="flex-1 text-center py-1 rounded-full bg-ink2/10 text-ink2 font-semibold"
+                                      >
+                                        Call
+                                      </a>
+                                    )}
+                                    {c?.whatsapp && (
+                                      <a
+                                        href={buildWhatsAppLink(c.whatsapp, getTemplateMessage("sampleReminder", c, t))}
+                                        target="_blank" rel="noreferrer"
+                                        className="flex-1 text-center py-1 rounded-full bg-loom/10 text-loom font-semibold"
+                                      >
+                                        WhatsApp
+                                      </a>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          }}
                         </Draggable>
                       ))}
                       {provided.placeholder}

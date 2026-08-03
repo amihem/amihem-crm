@@ -58,3 +58,57 @@ export function downloadCSV(filename, csvContent) {
   link.click();
   URL.revokeObjectURL(url);
 }
+
+// Builds a simple table PDF and returns it as a Blob — used for both
+// download and Web Share (WhatsApp) below.
+export async function buildPDF(title, rows, columns) {
+  const { jsPDF } = await import("jspdf");
+  await import("jspdf-autotable");
+  const doc = new jsPDF();
+  doc.setFontSize(14);
+  doc.text(title, 14, 16);
+  doc.setFontSize(9);
+  doc.setTextColor(120);
+  doc.text(`Generated ${new Date().toLocaleDateString("en-IN")} — Amihem CRM`, 14, 22);
+  doc.autoTable({
+    startY: 28,
+    head: [columns.map((c) => c.label)],
+    body: rows.map((row) => columns.map((c) => String(row[c.key] ?? ""))),
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [27, 35, 64] }, // ink color
+  });
+  return doc.output("blob");
+}
+
+export function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+// Tries the native share sheet (works on most mobile browsers, lets the
+// person pick WhatsApp directly and attaches the file). Falls back to a
+// plain download + opens WhatsApp with a text note, since wa.me links
+// can't attach files themselves — that's a WhatsApp/browser limitation,
+// not something any web app can work around.
+export async function shareOrDownloadPDF(filename, blob, whatsappPhone) {
+  const file = new File([blob], filename, { type: "application/pdf" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return "shared";
+    } catch {
+      // person cancelled the share sheet — fall through to download
+    }
+  }
+  downloadBlob(filename, blob);
+  if (whatsappPhone) {
+    const digits = String(whatsappPhone).replace(/\D/g, "");
+    const withCountry = digits.length === 10 ? `91${digits}` : digits;
+    window.open(`https://wa.me/${withCountry}?text=${encodeURIComponent("Sharing a report — please find the PDF attached (downloaded to your device, attach it here).")}`, "_blank");
+  }
+  return "downloaded";
+}

@@ -1,16 +1,24 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { useCustomers, useProducts, useTickets, useFollowUps } from "../context/domains.jsx";
+import { useCustomers, useProducts, useTickets, useFollowUps, useInventory } from "../context/domains.jsx";
 import KpiCard from "../components/KpiCard.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
 import { formatDate, isOverdue, isToday, daysBetween } from "../utils/helpers";
 import { buildWhatsAppLink, getTemplateMessage } from "../services/whatsapp";
-import { WON_STAGES, LOST_STAGES } from "../data/schema";
+import { WON_STAGES, LOST_STAGES, LOW_STOCK_THRESHOLD } from "../data/schema";
 
 export default function Dashboard() {
   const { items: customers } = useCustomers();
+  const { items: products } = useProducts();
   const { items: tickets } = useTickets();
   const { items: followups } = useFollowUps();
+  const { items: inventory } = useInventory();
+
+  const lowStockItems = useMemo(
+    () => inventory.filter((i) => Number(i.quantity) <= LOW_STOCK_THRESHOLD),
+    [inventory]
+  );
+  const productName = (id) => products.find((p) => p.id === id)?.qualityName || "—";
 
   const stats = useMemo(() => {
     const won = tickets.filter((t) => WON_STAGES.includes(t.stage));
@@ -64,6 +72,24 @@ export default function Dashboard() {
           })}
         </Panel>
       </div>
+
+      {lowStockItems.length > 0 && (
+        <Panel title="Low Stock — Fabric Book & Hangers" accent="rust">
+          {lowStockItems.map((i) => (
+            <Link
+              key={i.id}
+              to="/inventory"
+              className="flex items-center justify-between py-2.5 border-b border-line last:border-0 hover:bg-paper -mx-2 px-2 rounded"
+            >
+              <div>
+                <div className="font-medium text-sm">{productName(i.productId)}</div>
+                <div className="text-xs text-muted">{i.itemType}{i.shade ? ` · ${i.shade}` : ""}{i.location ? ` · ${i.location}` : ""}</div>
+              </div>
+              <span className="text-xs font-semibold text-rust">{i.quantity} left</span>
+            </Link>
+          ))}
+        </Panel>
+      )}
 
       <Panel title="Recently Added Customers" empty="No customers yet.">
         {customers

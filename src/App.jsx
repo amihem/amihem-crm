@@ -6,7 +6,6 @@ import Customers from "./pages/Customers.jsx";
 import CustomerDetail from "./pages/CustomerDetail.jsx";
 import Products from "./pages/Products.jsx";
 import Tickets from "./pages/Tickets.jsx";
-import Reports from "./pages/Reports.jsx";
 import Login from "./pages/Login.jsx";
 import { AppProviders } from "./context/domains.jsx";
 import { AuthProvider, useAuth } from "./context/AuthContext.jsx";
@@ -20,6 +19,7 @@ const Inventory = lazy(() => import("./pages/Inventory.jsx"));
 const Collections = lazy(() => import("./pages/Collections.jsx"));
 const RoutePlanner = lazy(() => import("./pages/RoutePlanner.jsx"));
 const More = lazy(() => import("./pages/More.jsx"));
+const Reports = lazy(() => import("./pages/Reports.jsx"));
 
 function PageLoader() {
   return <div className="text-sm text-muted py-10 text-center">Loading…</div>;

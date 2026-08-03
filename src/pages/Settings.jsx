@@ -9,8 +9,8 @@ import {
 
 export default function Settings() {
   const { session, logout } = useAuth();
-  const { save: saveCustomer } = useCustomers();
-  const { save: saveProduct } = useProducts();
+  const { items: customers, save: saveCustomer } = useCustomers();
+  const { items: products, save: saveProduct } = useProducts();
   const { save: saveTicket } = useTickets();
   const { save: saveFollowUp } = useFollowUps();
 
@@ -57,23 +57,42 @@ export default function Settings() {
     }
   };
 
-  const handleImport = async (e, mapFn, saveFn, label) => {
+  const handleImport = async (e, mapFn, saveFn, label, isDuplicate) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setBusy(true);
     try {
       const rows = await parseSpreadsheet(file);
       const mapped = mapFn(rows);
+      let imported = 0;
+      let skipped = 0;
       for (const record of mapped) {
+        if (isDuplicate(record)) {
+          skipped += 1;
+          continue;
+        }
         await saveFn(record);
+        imported += 1;
       }
-      setStatus({ type: "ok", text: `Imported ${mapped.length} ${label} from ${rows.length} rows.` });
+      const skippedNote = skipped > 0 ? ` (${skipped} skipped as likely duplicates)` : "";
+      setStatus({ type: "ok", text: `Imported ${imported} ${label} from ${rows.length} rows${skippedNote}.` });
     } catch (err) {
       setStatus({ type: "error", text: err.message || "Could not read that file." });
     } finally {
       setBusy(false);
       e.target.value = "";
     }
+  };
+
+  const isDuplicateCustomer = (record) => {
+    const nameMatch = (a, b) => a && b && a.trim().toLowerCase() === b.trim().toLowerCase();
+    const phoneMatch = (a, b) => a && b && a.replace(/\D/g, "") === b.replace(/\D/g, "");
+    return customers.some((c) => nameMatch(c.name, record.name) || phoneMatch(c.phone, record.phone));
+  };
+
+  const isDuplicateProduct = (record) => {
+    return products.some((p) => p.qualityName && record.qualityName &&
+      p.qualityName.trim().toLowerCase() === record.qualityName.trim().toLowerCase());
   };
 
   return (
@@ -128,8 +147,8 @@ export default function Settings() {
         </button>
       </SettingsCard>
 
-      <SettingsCard title="Import Customers" desc="Excel (.xlsx) or CSV with columns like Name, City, Buyer, Phone, Category.">
-        <input ref={customerImportRef} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => handleImport(e, mapCustomerRows, saveCustomer, "customers")} className="hidden" />
+      <SettingsCard title="Import Customers" desc="Excel (.xlsx) or CSV with columns like Name, City, Buyer, Phone, Category. Rows matching an existing customer's name or phone are skipped automatically.">
+        <input ref={customerImportRef} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => handleImport(e, mapCustomerRows, saveCustomer, "customers", isDuplicateCustomer)} className="hidden" />
         <button
           onClick={() => customerImportRef.current?.click()}
           disabled={busy}
@@ -139,8 +158,8 @@ export default function Settings() {
         </button>
       </SettingsCard>
 
-      <SettingsCard title="Import Products" desc="Excel (.xlsx) or CSV with columns like Quality Name, Category, GSM, Mill, Price.">
-        <input ref={productImportRef} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => handleImport(e, mapProductRows, saveProduct, "products")} className="hidden" />
+      <SettingsCard title="Import Products" desc="Excel (.xlsx) or CSV with columns like Quality Name, Category, GSM, Mill, Price. Rows matching an existing quality name are skipped automatically.">
+        <input ref={productImportRef} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => handleImport(e, mapProductRows, saveProduct, "products", isDuplicateProduct)} className="hidden" />
         <button
           onClick={() => productImportRef.current?.click()}
           disabled={busy}

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LineChart, Line, Legend,
@@ -9,13 +9,50 @@ import { WON_STAGES, LOST_STAGES } from "../data/schema";
 
 const COLORS = ["#1B2340", "#C9862D", "#2F6E5D", "#B4453A", "#6B7280", "#2D3A6B"];
 
+const RANGE_OPTIONS = ["All Time", "This Month", "Last 30 Days", "Last 90 Days", "Custom"];
+
+function computeRange(rangeLabel, customFrom, customTo) {
+  const now = new Date();
+  if (rangeLabel === "This Month") {
+    const from = new Date(now.getFullYear(), now.getMonth(), 1);
+    return { from: from.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) };
+  }
+  if (rangeLabel === "Last 30 Days") {
+    const from = new Date(now); from.setDate(from.getDate() - 30);
+    return { from: from.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) };
+  }
+  if (rangeLabel === "Last 90 Days") {
+    const from = new Date(now); from.setDate(from.getDate() - 90);
+    return { from: from.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) };
+  }
+  if (rangeLabel === "Custom") {
+    return { from: customFrom || null, to: customTo || null };
+  }
+  return { from: null, to: null }; // All Time
+}
+
 export default function Analytics() {
   const { items: customers } = useCustomers();
   const { items: products } = useProducts();
-  const { items: tickets } = useTickets();
+  const { items: allTickets } = useTickets();
+  const [rangeLabel, setRangeLabel] = useState("All Time");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
 
   const customerName = (id) => customers.find((c) => c.id === id)?.name || "Unknown";
   const productCategory = (id) => products.find((p) => p.id === id)?.category || "Unknown";
+
+  const { from, to } = useMemo(() => computeRange(rangeLabel, customFrom, customTo), [rangeLabel, customFrom, customTo]);
+
+  const tickets = useMemo(() => {
+    if (!from && !to) return allTickets;
+    return allTickets.filter((t) => {
+      if (!t.date) return false;
+      if (from && t.date < from) return false;
+      if (to && t.date > to) return false;
+      return true;
+    });
+  }, [allTickets, from, to]);
 
   const overall = useMemo(() => {
     const won = tickets.filter((t) => WON_STAGES.includes(t.stage)).length;
@@ -80,9 +117,27 @@ export default function Analytics() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="font-display font-extrabold text-2xl">Conversion Analytics</h1>
-        <p className="text-muted text-sm mt-1">Where samples are converting — and where they're stuck.</p>
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="font-display font-extrabold text-2xl">Conversion Analytics</h1>
+          <p className="text-muted text-sm mt-1">Where samples are converting — and where they're stuck.</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={rangeLabel}
+            onChange={(e) => setRangeLabel(e.target.value)}
+            className="border border-line rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-ink2"
+          >
+            {RANGE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+          {rangeLabel === "Custom" && (
+            <>
+              <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="border border-line rounded-lg px-2 py-2 text-sm bg-white outline-none focus:border-ink2" />
+              <span className="text-muted text-sm">to</span>
+              <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="border border-line rounded-lg px-2 py-2 text-sm bg-white outline-none focus:border-ink2" />
+            </>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
@@ -154,7 +209,7 @@ export default function Analytics() {
               <span className="text-muted">{c.won} won / {c.total} samples</span>
             </div>
           ))}
-          {topCustomers.length === 0 && <p className="text-sm text-muted py-2">No data yet.</p>}
+          {topCustomers.length === 0 && <p className="text-sm text-muted py-2">No data in this range.</p>}
         </div>
       </ChartCard>
     </div>
