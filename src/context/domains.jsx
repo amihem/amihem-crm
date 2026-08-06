@@ -7,8 +7,6 @@ export const TicketsDomain = createDomainContext(STORES.tickets);
 export const FollowUpsDomain = createDomainContext(STORES.followups);
 export const CallsDomain = createDomainContext(STORES.calls);
 export const InventoryDomain = createDomainContext(STORES.inventory);
-export const CollectionsDomain = createDomainContext(STORES.collections);
-export const VisitsDomain = createDomainContext(STORES.visits);
 export const AttachmentsDomain = createDomainContext(STORES.attachments);
 
 export const useCustomers = CustomersDomain.useDomain;
@@ -17,8 +15,6 @@ export const useTickets = TicketsDomain.useDomain;
 export const useFollowUps = FollowUpsDomain.useDomain;
 export const useCalls = CallsDomain.useDomain;
 export const useInventory = InventoryDomain.useDomain;
-export const useCollections = CollectionsDomain.useDomain;
-export const useVisits = VisitsDomain.useDomain;
 export const useAttachments = AttachmentsDomain.useDomain;
 
 export function AppProviders({ children }) {
@@ -29,11 +25,7 @@ export function AppProviders({ children }) {
           <FollowUpsDomain.Provider>
             <CallsDomain.Provider>
               <InventoryDomain.Provider>
-                <CollectionsDomain.Provider>
-                  <VisitsDomain.Provider>
-                    <AttachmentsDomain.Provider>{children}</AttachmentsDomain.Provider>
-                  </VisitsDomain.Provider>
-                </CollectionsDomain.Provider>
+                <AttachmentsDomain.Provider>{children}</AttachmentsDomain.Provider>
               </InventoryDomain.Provider>
             </CallsDomain.Provider>
           </FollowUpsDomain.Provider>

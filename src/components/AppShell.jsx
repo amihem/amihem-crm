@@ -8,22 +8,17 @@ const NAV = [
   { to: "/", label: "Dashboard", icon: "▦" },
   { to: "/customers", label: "Masters", icon: "◈", matchAlso: ["/products"] },
   { to: "/tickets", label: "Samples", icon: "✎" },
-  { to: "/pipeline", label: "Pipeline", icon: "⌗" },
   { to: "/analytics", label: "Analytics", icon: "◔" },
-  { to: "/reports", label: "Reports", icon: "▥" },
-  { to: "/route-planner", label: "Route Planner", icon: "⌘" },
-  { to: "/collections", label: "Collections", icon: "❋" },
   { to: "/inventory", label: "Inventory", icon: "▧" },
+  { to: "/reports", label: "Reports", icon: "▥" },
 ];
 
-// Mobile bottom nav only has room for ~5 — the rest live on the "More" page
-const MOBILE_NAV = [NAV[0], NAV[1], NAV[2], NAV[3], { to: "/more", label: "More", icon: "⋯" }];
+// Mobile bottom nav — 5 slots, covers the daily flow
+const MOBILE_NAV = [NAV[0], NAV[1], NAV[2], NAV[3], NAV[5]];
 
 export default function AppShell() {
   const { session, permissions, logout } = useAuth();
   const { pathname } = useLocation();
-
-  const isActiveNav = (n) => pathname === n.to || n.matchAlso?.includes(pathname);
 
   return (
     <div className="min-h-screen flex flex-col sm:flex-row">
@@ -38,9 +33,13 @@ export default function AppShell() {
           <NavLink
             key={n.to}
             to={n.to}
-            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
-              isActiveNav(n) ? "bg-white/10 text-white" : "text-white/60 hover:bg-white/5 hover:text-white"
-            }`}
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
+                isActive || n.matchAlso?.some((p) => pathname === p)
+                  ? "bg-white/10 text-white"
+                  : "text-white/60 hover:bg-white/5 hover:text-white"
+              }`
+            }
           >
             <span className="text-base">{n.icon}</span>
             {n.label}
@@ -97,7 +96,7 @@ export default function AppShell() {
             to={n.to}
             className={({ isActive }) =>
               `flex flex-col items-center gap-0.5 px-2 py-1 text-xs font-medium ${
-                (isActive || n.matchAlso?.includes(pathname)) ? "text-ink" : "text-muted"
+                isActive ? "text-ink" : "text-muted"
               }`
             }
           >

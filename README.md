@@ -1,7 +1,8 @@
-# Amihem CRM — Phase 1
+# Amihem CRM
 
-Textile sample-to-order conversion tracker. Offline-first (IndexedDB), no
-backend required. Built with Vite + React + Tailwind.
+Textile sample-to-order conversion tracker. Offline-first by default
+(IndexedDB), optional Supabase backend for cross-device sync. Built with
+Vite + React + Tailwind.
 
 ## Run locally
 ```
@@ -15,104 +16,99 @@ npm run build      # outputs to dist/
 ```
 Deploy `dist/` to Vercel — `vercel.json` is already set with
 `outputDirectory: dist` (note: **dist**, not `build` — this is Vite, not
-CRA, so double-check that setting if you're used to your other app).
+CRA).
 
-## What's built (Phase 1 + Phase 2)
-**Phase 1**
-- **Dashboard** — today's/overdue follow-ups, pending samples, conversion %
-- **Customer Master** — full CRUD, search, status filter
-- **Product Master** — full CRUD (qualities, GSM, mill, price)
-- **Sample Management** — tickets with stage tracking, courier info
-- **Follow-up Module** — unlimited follow-ups per ticket, priority,
-  automatic overdue flagging
-- **WhatsApp Integration** — one-click templated wa.me links per ticket
-- **Reports** — CSV export (customer / sample / pending / follow-up)
+## What's built
 
-**Phase 2**
-- **Pipeline** — Kanban board of all tickets, drag a card to change stage
-- **Analytics** — conversion KPIs, stage breakdown, monthly trend,
-  city-wise and product-category-wise conversion, top customers by volume
-- **Customer Detail / Timeline** — click any customer to see their full
-  chronological history (samples, follow-ups, calls) in one place
-- **Customer Scoring** — Hot / Warm / Cold badge, rule-based (see
-  `src/utils/scoring.js` — explicitly not ML, weights are editable)
-- **Call Log** — log calls against a customer from their detail page,
-  feeds into the timeline and score
+**Dashboard** — today's/overdue follow-ups, pending samples, conversion %,
+open queries going stale (7+ days untouched, even without a next-follow-up
+date set), low-stock inventory alerts, recently added customers.
 
-**Phase 3**
-- **Excel/CSV Import** — Settings → Import Customers / Import Products,
-  accepts .xlsx/.xls/.csv with flexible column-name matching
-- **Backup / Restore** — Settings → download full JSON backup, restore
-  from a backup file (merges by ID)
-- **Login with Roles** — Admin / Manager / Sales Executive. **This is
-  UI-level gating only, not real security** (no backend = no real access
-  control) — it hides destructive actions (delete) from non-Admins and
-  hides Settings from Sales Executives. See
-  `src/context/AuthContext.jsx` for the honest explanation of what this
-  does and doesn't protect.
+**Masters** (Customers + Products under one nav slot, tab-switcher at top
+of each page) — full CRUD, alphabetical sort, search-with-dropdown,
+bulk select for status change / delete.
 
-Seeded with demo data on first load so it's usable immediately — open the
-app, poke around, then clear IndexedDB (`amihem_crm` DB in devtools) if you
-want to start clean.
+**Sample Management** — the core module:
+- New tickets support **multiple products/qualities in one go** — pick a
+  customer once, add as many product rows as needed, each becomes its own
+  ticket sharing the same dispatch/courier details.
+- Customer name and product are **blank by default** with type-to-search
+  selection, plus **"+ New"** inline shortcuts to add a customer or
+  product without leaving the ticket form.
+- **Open Queries / Closed / All** toggle — a "query" is a customer's
+  sampling request; it stays Open until you explicitly **Close** it with a
+  result (order value if won, reason if lost). Nothing gets silently
+  forgotten in a stage dropdown.
+- Tickets grouped by customer (one card per customer, all their samples
+  nested inside) with staleness highlighting.
+- Full **Edit** button on every ticket — not just stage, every field.
+- Photo attachments (Garment Photo / Dispatch Photo / Other), compressed
+  client-side before storing.
+- Order-probability % per ticket (rule-based, see `PROBABILITY_RULES` in
+  `data/schema.js`).
+- Courier + POD tracking (charges, POD received).
+- WhatsApp reminder with a **checklist** of which samples to mention —
+  builds one message only for the ones you select.
 
-Note: if you're upgrading from a Phase 1 install, the IndexedDB schema
-version bumped (adds a `calls` store) — it upgrades automatically on next
-load, no action needed on your end.
+**Analytics** — conversion KPIs, stage breakdown, monthly trend,
+city/product-category conversion, top customers, with a **date-range
+filter** (This Month / Last 30 / Last 90 / Custom / All Time).
 
-First launch now asks for a name + role (stored only in this browser, no
-password, no server) — this is just for personalizing what's shown.
+**Customer Detail / Timeline** — full chronological history (samples,
+follow-ups, calls) per customer, Hot/Warm/Cold scoring (rule-based, see
+`utils/scoring.js`), Call/WhatsApp buttons, call logging.
 
-**Additional modules** (accessible via sidebar "More" on desktop, ⋯ menu
-on mobile):
-- **Route Planner** — group customers by city, build a day's visit list,
-  check off as you go
-- **Seasonal Collections** — plan Autumn/Winter, Spring/Summer, festive,
-  etc. launches with linked products and a launch-date reminder
-- **Fabric Book & Hanger Inventory** — track sample books/hangers/cut
-  pieces on hand by quality and shade, so you don't dispatch duplicates
-- **Order Probability** — each sample ticket now shows a rule-based %
-  likelihood of converting (see `PROBABILITY_RULES` in `data/schema.js`
-  to tune the weights)
-- **Courier POD tracking** — courier charges and POD-received status on
-  each ticket
+**Inventory** — fabric book/hanger/shade-card stock by quality, with a
+low-stock badge (≤2, threshold in `LOW_STOCK_THRESHOLD` in `data/schema.js`)
+that also surfaces on the Dashboard.
+
+**Reports** — CSV, PDF, or share-to-WhatsApp (via the device share sheet)
+for Customer / Sample / Pending / Follow-up reports.
+
+**Settings** — Excel/CSV import for Customers & Products (duplicate rows
+skipped automatically by name/phone or quality name), JSON backup/restore.
+
+**Login with Roles** — Admin / Manager / Sales Executive. **UI-level
+gating only** (hides delete buttons, hides Settings) — see
+`src/context/AuthContext.jsx` for what this does and doesn't protect.
+Logout is available directly in the sidebar (desktop) and top bar (mobile).
+
+**Overdue reminder popup** — once per day, if there are overdue
+follow-ups, a popup surfaces them on app open with one-tap Call/WhatsApp.
 
 ## Architecture — read this before extending
 **All data access goes through `src/services/dataService.js`.** Components
-never touch IndexedDB directly — they go through the domain hooks
-(`useCustomers`, `useProducts`, `useTickets`, `useFollowUps` in
-`src/context/domains.jsx`), which are all built off one factory
-(`createDomainContext.jsx`) so adding a new entity (e.g. `visits`,
-`calls`) is: add a store name in `dataService.js`, call
-`createDomainContext()` once, done.
-
-This is what makes migrating to Supabase later a swap of `dataService.js`
-internals, not a rewrite — same reasoning you already applied to
-`trdsls-app`.
+never touch storage directly — they go through domain hooks
+(`useCustomers`, `useProducts`, `useTickets`, `useFollowUps`, `useCalls`,
+`useInventory`, `useAttachments` in `src/context/domains.jsx`), all built
+off one factory (`createDomainContext.jsx`). Adding a new entity is: add a
+store name in `services/stores.js`, call `createDomainContext()` once.
 
 ```
 /src
-  /components   — StatusBadge, KpiCard, Modal, FormField, AppShell
-  /pages        — Dashboard, Customers, Products, Tickets, Reports
-  /context      — domain contexts (customers/products/tickets/followups)
-  /services     — dataService.js (IndexedDB), whatsapp.js
-  /utils        — helpers.js (dates, CSV, ticket numbering)
+  /components   — StatusBadge, KpiCard, Modal, FormField, AppShell,
+                   MasterTabs, SearchDropdown, EntitySearchField,
+                   QuickAddCustomer, QuickAddProduct, OverdueReminderPopup
+  /pages        — Dashboard, Customers, Products, CustomerDetail, Tickets,
+                   Analytics, Inventory, Reports, Settings, Login
+  /context      — AuthContext, domain contexts
+  /services     — dataService.js (router), indexedDbBackend.js,
+                   supabaseBackend.js, supabaseAuth.js, whatsapp.js,
+                   backupImport.js
+  /utils        — helpers.js, scoring.js, image.js (photo compression)
   /data         — schema.js (enums/shape reference), seed.js (demo data)
 ```
 
 ## Switching to Supabase (cloud sync across devices)
 
 By default the app runs entirely on IndexedDB — offline, per-device, no
-login needed beyond a name. To get cross-device sync (same pattern you
-already use in `trdsls-app`), switch to Supabase:
+login needed beyond a name.
 
-**1. Create the tables**
-In your Supabase project → SQL Editor, run `supabase/schema.sql` — creates
-one real table per store (`customers`, `products`, `tickets`,
-`followups`, `calls`, `inventory`, `collections`, `visits`) with proper
-columns, foreign keys (`tickets.customer_id → customers.id`,
-`followups.ticket_id → tickets.id`, etc.), and RLS so every row is scoped
-to `auth.uid()`. This is a real relational schema — you can query it
-directly in Supabase's Table Editor or SQL, not just through the app.
+**1. Create the tables** — in Supabase SQL Editor, run `supabase/schema.sql`.
+One real table per store with foreign keys and RLS scoped to `auth.uid()`.
+Safe to re-run if you already applied an earlier version — it uses
+`if not exists` and includes `alter table ... add column if not exists`
+migrations for columns added since.
 
 **2. Set your env vars**
 ```
@@ -121,38 +117,19 @@ cp .env.example .env
 Fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from Supabase →
 Project Settings → API.
 
-**3. That's it — nothing else changes**
-`dataService.js` auto-detects the env vars and routes every read/write to
-`supabaseBackend.js` instead of `indexedDbBackend.js`. `supabaseBackend.js`
-converts camelCase JS fields to snake_case columns automatically, so a
-"store" name (e.g. `tickets`) maps straight to a real table of the same
-name — no component, hook, or page needed to change.
+**3. Nothing else changes** — `dataService.js` auto-detects the env vars
+and routes every read/write to `supabaseBackend.js`, which converts
+camelCase JS fields to snake_case columns automatically.
 
-**One real change you'll notice:** the login screen switches from
-"name + role" to real email/password (Sign In / Create Account), because
-Supabase's Row Level Security needs an actual authenticated user to know
-whose data is whose. Role (Admin/Manager/Sales Executive) is still just a
-local UI preference layered on top — see `src/context/AuthContext.jsx`.
+**One real change you'll notice:** login switches from "name + role" to
+real email/password, because RLS needs an actual authenticated user. Role
+is still a local UI preference layered on top.
 
-**Files involved:**
-```
-src/services/supabaseClient.js    — client init, only active if env vars set
-src/services/supabaseBackend.js   — Supabase implementation (camelCase <-> snake_case, generic across all tables)
-src/services/supabaseAuth.js      — signUp/signIn/signOut/onAuthChange
-src/services/indexedDbBackend.js  — original IndexedDB implementation
-src/services/dataService.js       — router: picks backend automatically
-supabase/schema.sql               — run this once in Supabase SQL Editor
-.env.example                      — copy to .env with your project keys
-```
-
-**Migrating existing IndexedDB data to Supabase:** use Settings → Backup
-to export your current data as JSON first (works on either backend). Once
-you've switched to Supabase and signed in, importing that same JSON back
-via Settings → Restore will push it into Supabase instead — the restore
-function also goes through `dataService.js`, so it doesn't need to know
-which backend is active either.
+**Migrating existing IndexedDB data to Supabase:** Settings → Backup to
+export JSON first, switch to Supabase, sign in, then Settings → Restore
+to push that same JSON in.
 
 ## Not built yet
-Courier POD reconciliation reports and fabric-book-level batch tracking
-are intentionally kept simple (the fields exist, but there's no
-low-stock alerting yet). Ask if you want that added.
+Order/revenue rollup dashboard (order value is captured when you close a
+won query, but not yet summarized anywhere), commission calculator. Ask
+when you want either.

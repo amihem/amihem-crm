@@ -5,20 +5,16 @@ import Dashboard from "./pages/Dashboard.jsx";
 import Customers from "./pages/Customers.jsx";
 import CustomerDetail from "./pages/CustomerDetail.jsx";
 import Products from "./pages/Products.jsx";
-import Tickets from "./pages/Tickets.jsx";
 import Login from "./pages/Login.jsx";
 import { AppProviders } from "./context/domains.jsx";
 import { AuthProvider, useAuth } from "./context/AuthContext.jsx";
 import * as dataService from "./services/dataService";
 import { buildSeed } from "./data/seed";
 
-const Pipeline = lazy(() => import("./pages/Pipeline.jsx"));
+const Tickets = lazy(() => import("./pages/Tickets.jsx"));
 const Analytics = lazy(() => import("./pages/Analytics.jsx"));
 const Settings = lazy(() => import("./pages/Settings.jsx"));
 const Inventory = lazy(() => import("./pages/Inventory.jsx"));
-const Collections = lazy(() => import("./pages/Collections.jsx"));
-const RoutePlanner = lazy(() => import("./pages/RoutePlanner.jsx"));
-const More = lazy(() => import("./pages/More.jsx"));
 const Reports = lazy(() => import("./pages/Reports.jsx"));
 
 function PageLoader() {
@@ -42,13 +38,9 @@ function AuthedApp() {
               <Route path="/customers/:id" element={<CustomerDetail />} />
               <Route path="/products" element={<Products />} />
               <Route path="/tickets" element={<Tickets />} />
-              <Route path="/pipeline" element={<Pipeline />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/reports" element={<Reports />} />
               <Route path="/inventory" element={<Inventory />} />
-              <Route path="/collections" element={<Collections />} />
-              <Route path="/route-planner" element={<RoutePlanner />} />
-              <Route path="/more" element={<More />} />
               <Route path="/settings" element={<Settings />} />
             </Route>
           </Routes>

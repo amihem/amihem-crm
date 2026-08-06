@@ -8,7 +8,5 @@ export const STORES = {
   followups: "followups",
   calls: "calls",
   inventory: "inventory",
-  collections: "collections",
-  visits: "visits",
   attachments: "attachments",
 };

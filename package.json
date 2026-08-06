@@ -10,7 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@hello-pangea/dnd": "^18.0.1",
     "@supabase/supabase-js": "^2.110.9",
     "date-fns": "^4.4.0",
     "idb": "^8.0.3",

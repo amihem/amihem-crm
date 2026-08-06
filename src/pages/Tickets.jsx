@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
 import { useCustomers, useProducts, useTickets, useFollowUps, useAttachments } from "../context/domains.jsx";
 import Modal from "../components/Modal.jsx";
+import EntitySearchField from "../components/EntitySearchField.jsx";
+import QuickAddCustomer from "../components/QuickAddCustomer.jsx";
+import QuickAddProduct from "../components/QuickAddProduct.jsx";
 import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
-import { formatDate, isOverdue, nextTicketNumber, daysBetween } from "../utils/helpers";
+import { formatDate, isOverdue, nextTicketNumbers, daysBetween, newId } from "../utils/helpers";
 import { ticketProbability } from "../utils/scoring";
 import { compressImage } from "../utils/image";
 import { buildWhatsAppLink, getTemplateMessage, getMultiSampleReminderMessage, TEMPLATE_LABELS } from "../services/whatsapp";
@@ -13,13 +16,13 @@ import {
 } from "../data/schema";
 
 export default function Tickets() {
-  const { items: customers } = useCustomers();
-  const { items: products } = useProducts();
+  const { items: customers, save: saveCustomer } = useCustomers();
+  const { items: products, save: saveProduct } = useProducts();
   const { items: tickets, save: saveTicket } = useTickets();
   const { items: followups } = useFollowUps();
   const [stageFilter, setStageFilter] = useState("");
   const [queryFilter, setQueryFilter] = useState("open"); // open | closed | all
-  const [newTicket, setNewTicket] = useState(null);
+  const [creatingTicket, setCreatingTicket] = useState(false);
   const [openTicket, setOpenTicket] = useState(null);
   const [remindGroup, setRemindGroup] = useState(null); // { customer, tickets }
 
@@ -62,7 +65,6 @@ export default function Tickets() {
       .filter((g) => g.customer)
       .sort((a, b) => {
         if (queryFilter === "open") {
-          // Most neglected (oldest last-touch) open query rises to the top
           const aOldest = Math.min(...a.tickets.map((t) => daysBetween(lastTouchedDate(t.id, t.date))));
           const bOldest = Math.min(...b.tickets.map((t) => daysBetween(lastTouchedDate(t.id, t.date))));
           return bOldest - aOldest;
@@ -70,17 +72,6 @@ export default function Tickets() {
         return new Date(b.tickets[0].date) - new Date(a.tickets[0].date);
       });
   }, [filtered, customers, queryFilter]);
-
-  const blankTicket = () => ({
-    ticketNumber: nextTicketNumber(tickets),
-    date: new Date().toISOString().slice(0, 10),
-    customerId: customers[0]?.id || "",
-    productId: products[0]?.id || "",
-    shade: "", quantity: "", unit: "meters", sampleType: "Cutting",
-    dispatchMode: "Courier", courierName: "", trackingNumber: "", courierCharges: "", podReceived: false,
-    dispatchDate: "", expectedDelivery: "", received: false, garmentDeveloped: false,
-    stage: "Sample Sent", remarks: "",
-  });
 
   return (
     <div className="flex flex-col gap-5">
@@ -90,18 +81,12 @@ export default function Tickets() {
           <p className="text-muted text-sm mt-1">{tickets.length} tickets</p>
         </div>
         <button
-          onClick={() => setNewTicket(blankTicket())}
-          disabled={!customers.length || !products.length}
-          className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-ink2 transition disabled:opacity-40"
+          onClick={() => setCreatingTicket(true)}
+          className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-ink2 transition"
         >
           + New Sample Ticket
         </button>
       </div>
-      {(!customers.length || !products.length) && (
-        <p className="text-xs text-thread bg-thread/10 border border-thread/30 rounded-lg px-3 py-2">
-          Add at least one customer and product before creating a ticket.
-        </p>
-      )}
 
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex bg-panel border border-line rounded-lg p-0.5 w-fit">
@@ -201,18 +186,23 @@ export default function Tickets() {
           );
         })}
         {groupedByCustomer.length === 0 && (
-          <div className="text-center py-12 text-muted text-sm">No tickets in this stage.</div>
+          <div className="text-center py-12 text-muted text-sm">No tickets in this view.</div>
         )}
       </div>
 
-      <Modal open={!!newTicket} onClose={() => setNewTicket(null)} title="New Sample Ticket" wide>
-        {newTicket && (
-          <TicketForm
-            initial={newTicket}
+      <Modal open={creatingTicket} onClose={() => setCreatingTicket(false)} title="New Sample Ticket" wide>
+        {creatingTicket && (
+          <NewTicketForm
             customers={customers}
             products={products}
-            onSave={async (form) => { await saveTicket(form); setNewTicket(null); }}
-            onCancel={() => setNewTicket(null)}
+            existingTickets={tickets}
+            onCreateCustomer={saveCustomer}
+            onCreateProduct={saveProduct}
+            onSubmit={async (ticketsToCreate) => {
+              for (const t of ticketsToCreate) await saveTicket(t);
+              setCreatingTicket(false);
+            }}
+            onCancel={() => setCreatingTicket(false)}
           />
         )}
       </Modal>
@@ -223,6 +213,10 @@ export default function Tickets() {
             ticket={tickets.find((t) => t.id === openTicket.id) || openTicket}
             customer={customers.find((c) => c.id === openTicket.customerId)}
             product={products.find((p) => p.id === openTicket.productId)}
+            customers={customers}
+            products={products}
+            onCreateCustomer={saveCustomer}
+            onCreateProduct={saveProduct}
             onUpdate={async (patch) => saveTicket({ ...openTicket, ...patch })}
           />
         )}
@@ -291,64 +285,176 @@ function ReminderPicker({ group, productName, onClose }) {
   );
 }
 
-function TicketForm({ initial, customers, products, onSave, onCancel }) {
-  const [form, setForm] = useState(initial);
-  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
-  const setBool = (k) => (e) => setForm({ ...form, [k]: e.target.checked });
+// ---------- New Sample Ticket — one customer, one-or-more qualities ----------
+function blankRow() {
+  return { key: newId(), productId: "", shade: "", quantity: "", sampleType: "Cutting" };
+}
+
+function NewTicketForm({ customers, products, existingTickets, onCreateCustomer, onCreateProduct, onSubmit, onCancel }) {
+  const [customerId, setCustomerId] = useState("");
+  const [rows, setRows] = useState([blankRow()]);
+  const [shared, setShared] = useState({
+    date: new Date().toISOString().slice(0, 10),
+    dispatchMode: "Courier", courierName: "", trackingNumber: "", courierCharges: "", podReceived: false,
+    dispatchDate: "", expectedDelivery: "", stage: "Sample Sent", remarks: "",
+  });
+  const [quickAdd, setQuickAdd] = useState(null); // null | "customer" | { row: key }
+
+  const setSharedField = (k) => (e) => setShared({ ...shared, [k]: e.target.value });
+  const setSharedBool = (k) => (e) => setShared({ ...shared, [k]: e.target.checked });
+
+  const updateRow = (key, patch) => setRows(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const addRow = () => setRows([...rows, blankRow()]);
+  const removeRow = (key) => setRows(rows.length > 1 ? rows.filter((r) => r.key !== key) : rows);
+
+  const handleCreateCustomer = async (form) => {
+    const saved = await onCreateCustomer(form);
+    setCustomerId(saved.id);
+    setQuickAdd(null);
+  };
+
+  const handleCreateProduct = async (form) => {
+    const saved = await onCreateProduct(form);
+    if (quickAdd?.row) updateRow(quickAdd.row, { productId: saved.id });
+    setQuickAdd(null);
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const validRows = rows.filter((r) => r.productId);
+    if (!customerId || validRows.length === 0) return;
+    const ticketNumbers = nextTicketNumbers(existingTickets, validRows.length);
+    const tickets = validRows.map((r, i) => ({
+      ticketNumber: ticketNumbers[i],
+      date: shared.date,
+      customerId,
+      productId: r.productId,
+      shade: r.shade,
+      quantity: r.quantity,
+      unit: "meters",
+      sampleType: r.sampleType,
+      dispatchMode: shared.dispatchMode,
+      courierName: shared.courierName,
+      trackingNumber: shared.trackingNumber,
+      courierCharges: shared.courierCharges,
+      podReceived: shared.podReceived,
+      dispatchDate: shared.dispatchDate,
+      expectedDelivery: shared.expectedDelivery,
+      received: false,
+      garmentDeveloped: false,
+      stage: shared.stage,
+      remarks: shared.remarks,
+    }));
+    onSubmit(tickets);
+  };
 
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(form); }} className="grid sm:grid-cols-2 gap-3">
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
       <Field label="Customer *">
-        <Select required options={customers.map((c) => c.name)} value={customers.find(c=>c.id===form.customerId)?.name || ""}
-          onChange={(e) => setForm({ ...form, customerId: customers.find(c => c.name === e.target.value)?.id })} />
+        <EntitySearchField
+          items={customers}
+          value={customerId}
+          onChange={setCustomerId}
+          displayFn={(c) => c.name}
+          subFn={(c) => [c.city, c.buyerName].filter(Boolean).join(" · ")}
+          searchFields={["name", "city", "buyerName", "phone"]}
+          placeholder="Search or select customer…"
+          onAddNew={() => setQuickAdd("customer")}
+          addNewLabel="Add New Customer"
+        />
       </Field>
-      <Field label="Product *">
-        <Select required options={products.map((p) => p.qualityName)} value={products.find(p=>p.id===form.productId)?.qualityName || ""}
-          onChange={(e) => setForm({ ...form, productId: products.find(p => p.qualityName === e.target.value)?.id })} />
-      </Field>
-      <Field label="Shade"><TextInput value={form.shade} onChange={set("shade")} /></Field>
-      <Field label="Quantity"><TextInput value={form.quantity} onChange={set("quantity")} /></Field>
-      <Field label="Sample Type">
-        <Select options={SAMPLE_TYPE} value={form.sampleType} onChange={set("sampleType")} />
-      </Field>
-      <Field label="Dispatch Mode">
-        <Select options={DISPATCH_MODE} value={form.dispatchMode} onChange={set("dispatchMode")} />
-      </Field>
-      {form.dispatchMode === "Courier" && (
-        <>
-          <Field label="Courier Name"><TextInput value={form.courierName} onChange={set("courierName")} /></Field>
-          <Field label="Tracking Number"><TextInput value={form.trackingNumber} onChange={set("trackingNumber")} /></Field>
-          <Field label="Courier Charges (₹)"><TextInput value={form.courierCharges} onChange={set("courierCharges")} /></Field>
-          <label className="flex items-center gap-2 text-sm mt-6"><input type="checkbox" checked={form.podReceived} onChange={setBool("podReceived")} /> POD received</label>
-        </>
-      )}
-      <Field label="Dispatch Date"><TextInput type="date" value={form.dispatchDate} onChange={set("dispatchDate")} /></Field>
-      <Field label="Expected Delivery"><TextInput type="date" value={form.expectedDelivery} onChange={set("expectedDelivery")} /></Field>
-      <Field label="Stage">
-        <Select options={TICKET_STAGES} value={form.stage} onChange={set("stage")} />
-      </Field>
-      <div className="flex items-center gap-4 sm:col-span-2">
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.received} onChange={setBool("received")} /> Received by customer</label>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.garmentDeveloped} onChange={setBool("garmentDeveloped")} /> Garment developed</label>
-      </div>
-      <Field label="Remarks" className="sm:col-span-2"><TextArea value={form.remarks} onChange={set("remarks")} /></Field>
 
-      <div className="sm:col-span-2 flex justify-end gap-2 mt-2">
-        <button type="button" onClick={onCancel} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Cancel</button>
-        <button type="submit" className="px-4 py-2 rounded-lg text-sm font-semibold bg-ink text-white hover:bg-ink2">Create Ticket</button>
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-ink/80">Qualities being sampled *</span>
+          <button type="button" onClick={addRow} className="text-xs font-semibold text-ink2 hover:underline">
+            + Add another quality
+          </button>
+        </div>
+        <div className="flex flex-col gap-3">
+          {rows.map((row) => (
+            <div key={row.key} className="border border-line rounded-lg p-3 grid sm:grid-cols-2 gap-2 relative">
+              {rows.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => removeRow(row.key)}
+                  className="absolute top-2 right-2 text-xs text-muted hover:text-rust"
+                  aria-label="Remove this quality"
+                >
+                  ✕
+                </button>
+              )}
+              <div className="sm:col-span-2">
+                <EntitySearchField
+                  items={products}
+                  value={row.productId}
+                  onChange={(id) => updateRow(row.key, { productId: id })}
+                  displayFn={(p) => p.qualityName}
+                  subFn={(p) => [p.category, p.millName].filter(Boolean).join(" · ")}
+                  searchFields={["qualityName", "category", "millName", "colour"]}
+                  placeholder="Search or select product quality…"
+                  onAddNew={() => setQuickAdd({ row: row.key })}
+                  addNewLabel="Add New Product"
+                />
+              </div>
+              <TextInput placeholder="Shade" value={row.shade} onChange={(e) => updateRow(row.key, { shade: e.target.value })} />
+              <TextInput placeholder="Quantity" value={row.quantity} onChange={(e) => updateRow(row.key, { quantity: e.target.value })} />
+              <Select
+                options={SAMPLE_TYPE}
+                value={row.sampleType}
+                onChange={(e) => updateRow(row.key, { sampleType: e.target.value })}
+                className="sm:col-span-2"
+              />
+            </div>
+          ))}
+        </div>
       </div>
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Field label="Date"><TextInput type="date" value={shared.date} onChange={setSharedField("date")} /></Field>
+        <Field label="Dispatch Mode">
+          <Select options={DISPATCH_MODE} value={shared.dispatchMode} onChange={setSharedField("dispatchMode")} />
+        </Field>
+        {shared.dispatchMode === "Courier" && (
+          <>
+            <Field label="Courier Name"><TextInput value={shared.courierName} onChange={setSharedField("courierName")} /></Field>
+            <Field label="Tracking Number"><TextInput value={shared.trackingNumber} onChange={setSharedField("trackingNumber")} /></Field>
+            <Field label="Courier Charges (₹)"><TextInput value={shared.courierCharges} onChange={setSharedField("courierCharges")} /></Field>
+            <label className="flex items-center gap-2 text-sm mt-6"><input type="checkbox" checked={shared.podReceived} onChange={setSharedBool("podReceived")} /> POD received</label>
+          </>
+        )}
+        <Field label="Dispatch Date"><TextInput type="date" value={shared.dispatchDate} onChange={setSharedField("dispatchDate")} /></Field>
+        <Field label="Expected Delivery"><TextInput type="date" value={shared.expectedDelivery} onChange={setSharedField("expectedDelivery")} /></Field>
+        <Field label="Stage"><Select options={TICKET_STAGES} value={shared.stage} onChange={setSharedField("stage")} /></Field>
+        <Field label="Remarks" className="sm:col-span-2"><TextArea value={shared.remarks} onChange={setSharedField("remarks")} /></Field>
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onCancel} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Cancel</button>
+        <button type="submit" className="px-4 py-2 rounded-lg text-sm font-semibold bg-ink text-white hover:bg-ink2">
+          Create Ticket{rows.filter((r) => r.productId).length > 1 ? "s" : ""}
+        </button>
+      </div>
+
+      <Modal open={quickAdd === "customer"} onClose={() => setQuickAdd(null)} title="Add New Customer">
+        <QuickAddCustomer onSave={handleCreateCustomer} onCancel={() => setQuickAdd(null)} />
+      </Modal>
+      <Modal open={!!quickAdd?.row} onClose={() => setQuickAdd(null)} title="Add New Product">
+        <QuickAddProduct onSave={handleCreateProduct} onCancel={() => setQuickAdd(null)} />
+      </Modal>
     </form>
   );
 }
 
-function TicketDetail({ ticket, customer, product, onUpdate }) {
+// ---------- Ticket detail: view, edit, close, follow up, attach ----------
+function TicketDetail({ ticket, customer, product, customers, products, onCreateCustomer, onCreateProduct, onUpdate }) {
   const { items: allFollowUps, save: saveFollowUp } = useFollowUps();
   const { items: allAttachments, save: saveAttachment, remove: removeAttachment } = useAttachments();
   const [addingFollowUp, setAddingFollowUp] = useState(false);
-  const [waTemplate, setWaTemplate] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [closureNote, setClosureNote] = useState(ticket.closureNote || "");
   const [orderValue, setOrderValue] = useState(ticket.orderValue || "");
+  const [editing, setEditing] = useState(false);
 
   const followUps = allFollowUps
     .filter((f) => f.ticketId === ticket.id)
@@ -375,12 +481,7 @@ function TicketDetail({ ticket, customer, product, onUpdate }) {
   const isTerminalStage = WON_STAGES.includes(ticket.stage) || LOST_STAGES.includes(ticket.stage);
   const isWon = WON_STAGES.includes(ticket.stage);
 
-  const handleStageChange = (stage) => {
-    // Moving into a terminal stage doesn't auto-close — the person still
-    // fills in the closure note below and hits "Close Query" so there's
-    // always a recorded reason, not just a silent dropdown change.
-    onUpdate({ stage });
-  };
+  const handleStageChange = (stage) => onUpdate({ stage });
 
   const closeQuery = () => {
     onUpdate({
@@ -390,6 +491,20 @@ function TicketDetail({ ticket, customer, product, onUpdate }) {
     });
   };
 
+  if (editing) {
+    return (
+      <TicketEditForm
+        ticket={ticket}
+        customers={customers}
+        products={products}
+        onCreateCustomer={onCreateCustomer}
+        onCreateProduct={onCreateProduct}
+        onSave={async (patch) => { await onUpdate(patch); setEditing(false); }}
+        onCancel={() => setEditing(false)}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -397,17 +512,22 @@ function TicketDetail({ ticket, customer, product, onUpdate }) {
           <span className="text-sm font-semibold">{customer?.name}</span>
           <span className="text-xs text-muted"> · {product?.qualityName} · {ticket.shade}</span>
         </div>
-        {!isTerminalStage && (
-          <div className="text-right">
-            <div className="text-xs text-muted">Order probability</div>
-            <div className="font-display font-bold text-lg text-thread">{probability}%</div>
-          </div>
-        )}
-        {isTerminalStage && (
-          <span className={`text-xs font-semibold rounded-full px-2.5 py-1 border ${isWon ? "bg-loom/10 text-loom border-loom/30" : "bg-rust/10 text-rust border-rust/30"}`}>
-            {ticket.closedAt ? "Query Closed" : "Needs Closure Note"}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          <button onClick={() => setEditing(true)} className="text-xs font-semibold text-ink2 hover:underline">
+            Edit
+          </button>
+          {!isTerminalStage && (
+            <div className="text-right">
+              <div className="text-xs text-muted">Order probability</div>
+              <div className="font-display font-bold text-lg text-thread">{probability}%</div>
+            </div>
+          )}
+          {isTerminalStage && (
+            <span className={`text-xs font-semibold rounded-full px-2.5 py-1 border ${isWon ? "bg-loom/10 text-loom border-loom/30" : "bg-rust/10 text-rust border-rust/30"}`}>
+              {ticket.closedAt ? "Query Closed" : "Needs Closure Note"}
+            </span>
+          )}
+        </div>
       </div>
 
       {(ticket.courierName || ticket.trackingNumber) && (
@@ -534,6 +654,90 @@ function TicketDetail({ ticket, customer, product, onUpdate }) {
         )}
       </div>
     </div>
+  );
+}
+
+function TicketEditForm({ ticket, customers, products, onCreateCustomer, onCreateProduct, onSave, onCancel }) {
+  const [form, setForm] = useState({ ...ticket });
+  const [quickAdd, setQuickAdd] = useState(null); // null | "customer" | "product"
+  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const setBool = (k) => (e) => setForm({ ...form, [k]: e.target.checked });
+
+  const handleCreateCustomer = async (data) => {
+    const saved = await onCreateCustomer(data);
+    setForm({ ...form, customerId: saved.id });
+    setQuickAdd(null);
+  };
+  const handleCreateProduct = async (data) => {
+    const saved = await onCreateProduct(data);
+    setForm({ ...form, productId: saved.id });
+    setQuickAdd(null);
+  };
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSave(form); }} className="flex flex-col gap-3">
+      <Field label="Customer *">
+        <EntitySearchField
+          items={customers}
+          value={form.customerId}
+          onChange={(id) => setForm({ ...form, customerId: id })}
+          displayFn={(c) => c.name}
+          subFn={(c) => [c.city, c.buyerName].filter(Boolean).join(" · ")}
+          searchFields={["name", "city", "buyerName", "phone"]}
+          placeholder="Search or select customer…"
+          onAddNew={() => setQuickAdd("customer")}
+          addNewLabel="Add New Customer"
+        />
+      </Field>
+      <Field label="Product *">
+        <EntitySearchField
+          items={products}
+          value={form.productId}
+          onChange={(id) => setForm({ ...form, productId: id })}
+          displayFn={(p) => p.qualityName}
+          subFn={(p) => [p.category, p.millName].filter(Boolean).join(" · ")}
+          searchFields={["qualityName", "category", "millName", "colour"]}
+          placeholder="Search or select product quality…"
+          onAddNew={() => setQuickAdd("product")}
+          addNewLabel="Add New Product"
+        />
+      </Field>
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Field label="Shade"><TextInput value={form.shade} onChange={set("shade")} /></Field>
+        <Field label="Quantity"><TextInput value={form.quantity} onChange={set("quantity")} /></Field>
+        <Field label="Sample Type"><Select options={SAMPLE_TYPE} value={form.sampleType} onChange={set("sampleType")} /></Field>
+        <Field label="Dispatch Mode"><Select options={DISPATCH_MODE} value={form.dispatchMode} onChange={set("dispatchMode")} /></Field>
+        {form.dispatchMode === "Courier" && (
+          <>
+            <Field label="Courier Name"><TextInput value={form.courierName} onChange={set("courierName")} /></Field>
+            <Field label="Tracking Number"><TextInput value={form.trackingNumber} onChange={set("trackingNumber")} /></Field>
+            <Field label="Courier Charges (₹)"><TextInput value={form.courierCharges} onChange={set("courierCharges")} /></Field>
+            <label className="flex items-center gap-2 text-sm mt-6"><input type="checkbox" checked={form.podReceived} onChange={setBool("podReceived")} /> POD received</label>
+          </>
+        )}
+        <Field label="Dispatch Date"><TextInput type="date" value={form.dispatchDate} onChange={set("dispatchDate")} /></Field>
+        <Field label="Expected Delivery"><TextInput type="date" value={form.expectedDelivery} onChange={set("expectedDelivery")} /></Field>
+      </div>
+
+      <div className="flex items-center gap-4">
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.received} onChange={setBool("received")} /> Received by customer</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.garmentDeveloped} onChange={setBool("garmentDeveloped")} /> Garment developed</label>
+      </div>
+      <Field label="Remarks"><TextArea value={form.remarks} onChange={set("remarks")} /></Field>
+
+      <div className="flex justify-end gap-2 mt-1">
+        <button type="button" onClick={onCancel} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Cancel</button>
+        <button type="submit" className="px-4 py-2 rounded-lg text-sm font-semibold bg-ink text-white hover:bg-ink2">Save Changes</button>
+      </div>
+
+      <Modal open={quickAdd === "customer"} onClose={() => setQuickAdd(null)} title="Add New Customer">
+        <QuickAddCustomer onSave={handleCreateCustomer} onCancel={() => setQuickAdd(null)} />
+      </Modal>
+      <Modal open={quickAdd === "product"} onClose={() => setQuickAdd(null)} title="Add New Product">
+        <QuickAddProduct onSave={handleCreateProduct} onCancel={() => setQuickAdd(null)} />
+      </Modal>
+    </form>
   );
 }
 

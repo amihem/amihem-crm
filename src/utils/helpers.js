@@ -37,6 +37,14 @@ export function nextTicketNumber(existingTickets) {
   return `AMH-${year}-${String(count + 1).padStart(4, "0")}`;
 }
 
+// Batch version — when creating several tickets at once (one customer,
+// multiple qualities), each needs a distinct sequential number.
+export function nextTicketNumbers(existingTickets, count) {
+  const year = new Date().getFullYear();
+  const startCount = existingTickets.filter((t) => t.ticketNumber?.includes(`${year}`)).length;
+  return Array.from({ length: count }, (_, i) => `AMH-${year}-${String(startCount + i + 1).padStart(4, "0")}`);
+}
+
 export function toCSV(rows, columns) {
   const header = columns.map((c) => `"${c.label}"`).join(",");
   const body = rows
