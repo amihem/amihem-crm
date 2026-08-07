@@ -5,6 +5,7 @@ import { activeBackend } from "../services/dataService";
 import { buildSeed } from "../data/seed";
 import {
   exportBackup, restoreBackup, parseSpreadsheet, mapCustomerRows, mapProductRows,
+  exportAllToExcel, shareBackup,
 } from "../services/backupImport";
 
 export default function Settings() {
@@ -84,6 +85,30 @@ export default function Settings() {
     }
   };
 
+  const handleExcelExport = async () => {
+    setBusy(true);
+    try {
+      await exportAllToExcel();
+      setStatus({ type: "ok", text: "Excel file downloaded." });
+    } catch (err) {
+      setStatus({ type: "error", text: err.message || "Could not export." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleShare = async () => {
+    setBusy(true);
+    try {
+      const result = await shareBackup();
+      setStatus({ type: "ok", text: result === "shared" ? "Shared." : "Your device doesn't support direct sharing — backup downloaded instead." });
+    } catch (err) {
+      setStatus({ type: "error", text: err.message || "Could not share." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const isDuplicateCustomer = (record) => {
     const nameMatch = (a, b) => a && b && a.trim().toLowerCase() === b.trim().toLowerCase();
     const phoneMatch = (a, b) => a && b && a.replace(/\D/g, "") === b.replace(/\D/g, "");
@@ -101,6 +126,15 @@ export default function Settings() {
         <h1 className="font-display font-extrabold text-2xl">Settings</h1>
         <p className="text-muted text-sm mt-1">Backup, restore, and import data.</p>
       </div>
+
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+        <ToolbarTile icon="📊" label="Excel" tone="loom" onClick={handleExcelExport} disabled={busy} />
+        <ToolbarTile icon="☁" label="Backup" tone="ink2" onClick={exportBackup} disabled={busy} />
+        <ToolbarTile icon="↗" label="Share" tone="thread" onClick={handleShare} disabled={busy} />
+        <ToolbarTile icon="↺" label="Restore" tone="thread" onClick={() => restoreInputRef.current?.click()} disabled={busy} />
+        <ToolbarTile icon="⎋" label="Log Out" tone="rust" onClick={logout} />
+      </div>
+      <input ref={restoreInputRef} type="file" accept=".json" onChange={handleRestore} className="hidden" />
 
       {status && (
         <div className={`text-sm rounded-lg px-3 py-2 border ${status.type === "ok" ? "bg-loom/10 text-loom border-loom/30" : "bg-rust/10 text-rust border-rust/30"}`}>
@@ -126,26 +160,6 @@ export default function Settings() {
           </button>
         </SettingsCard>
       )}
-
-      <SettingsCard title="Backup" desc="Download all your data as a single JSON file — keep it somewhere safe.">
-        <button
-          onClick={exportBackup}
-          className="text-xs font-semibold px-3 py-2 rounded-lg bg-ink text-white hover:bg-ink2 w-fit"
-        >
-          Download Backup
-        </button>
-      </SettingsCard>
-
-      <SettingsCard title="Restore" desc="Upload a previously downloaded backup file. Existing records with the same ID will be overwritten.">
-        <input ref={restoreInputRef} type="file" accept=".json" onChange={handleRestore} className="hidden" />
-        <button
-          onClick={() => restoreInputRef.current?.click()}
-          disabled={busy}
-          className="text-xs font-semibold px-3 py-2 rounded-lg bg-panel border border-line hover:bg-paper w-fit disabled:opacity-50"
-        >
-          Choose Backup File…
-        </button>
-      </SettingsCard>
 
       <SettingsCard title="Import Customers" desc="Excel (.xlsx) or CSV with columns like Name, City, Buyer, Phone, Category. Rows matching an existing customer's name or phone are skipped automatically.">
         <input ref={customerImportRef} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => handleImport(e, mapCustomerRows, saveCustomer, "customers", isDuplicateCustomer)} className="hidden" />
@@ -179,5 +193,25 @@ function SettingsCard({ title, desc, children }) {
       {desc && <p className="text-xs text-muted">{desc}</p>}
       {children}
     </div>
+  );
+}
+
+const TILE_TONES = {
+  loom: "bg-loom text-white",
+  ink2: "bg-ink2 text-white",
+  thread: "bg-thread text-white",
+  rust: "bg-rust text-white",
+};
+
+function ToolbarTile({ icon, label, tone, onClick, disabled }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex flex-col items-center justify-center gap-1 rounded-xl py-3 text-xs font-semibold disabled:opacity-50 ${TILE_TONES[tone]}`}
+    >
+      <span className="text-lg leading-none">{icon}</span>
+      {label}
+    </button>
   );
 }

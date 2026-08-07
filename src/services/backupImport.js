@@ -38,6 +38,51 @@ export async function restoreBackup(file) {
   return parsed;
 }
 
+// Every store as one multi-sheet .xlsx workbook — handy for opening in
+// Excel directly, unlike the JSON backup which is for restoring in-app.
+export async function exportAllToExcel() {
+  const workbook = XLSX.utils.book_new();
+  let hasAnySheet = false;
+  for (const store of Object.values(STORES)) {
+    const records = await dataService.getAll(store);
+    if (records.length === 0) continue;
+    const sheet = XLSX.utils.json_to_sheet(records);
+    XLSX.utils.book_append_sheet(workbook, sheet, store.slice(0, 31)); // sheet name limit
+    hasAnySheet = true;
+  }
+  if (!hasAnySheet) throw new Error("No data yet to export.");
+  XLSX.writeFile(workbook, `amihem-crm-export-${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+// Shares the JSON backup through the device share sheet (WhatsApp, Drive,
+// email, etc.) where supported; otherwise falls back to a plain download.
+export async function shareBackup() {
+  const data = {};
+  for (const store of Object.values(STORES)) {
+    data[store] = await dataService.getAll(store);
+  }
+  const payload = { app: "amihem-crm", exportedAt: new Date().toISOString(), data };
+  const filename = `amihem-crm-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const file = new File([blob], filename, { type: "application/json" });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return "shared";
+    } catch {
+      // person cancelled — fall through to download
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+  return "downloaded";
+}
+
 // Parses an .xlsx/.csv file into an array of row objects keyed by header.
 export function parseSpreadsheet(file) {
   return new Promise((resolve, reject) => {

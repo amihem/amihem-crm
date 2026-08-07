@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useCustomers, useProducts, useTickets, useFollowUps, useAttachments } from "../context/domains.jsx";
+import { useAuth } from "../context/AuthContext.jsx";
 import Modal from "../components/Modal.jsx";
 import EntitySearchField from "../components/EntitySearchField.jsx";
 import QuickAddCustomer from "../components/QuickAddCustomer.jsx";
@@ -18,13 +19,17 @@ import {
 export default function Tickets() {
   const { items: customers, save: saveCustomer } = useCustomers();
   const { items: products, save: saveProduct } = useProducts();
-  const { items: tickets, save: saveTicket } = useTickets();
-  const { items: followups } = useFollowUps();
+  const { items: tickets, save: saveTicket, remove: removeTicket } = useTickets();
+  const { items: followups, save: saveFollowUp } = useFollowUps();
+  const { permissions } = useAuth();
   const [stageFilter, setStageFilter] = useState("");
   const [queryFilter, setQueryFilter] = useState("open"); // open | closed | all
   const [creatingTicket, setCreatingTicket] = useState(false);
   const [openTicket, setOpenTicket] = useState(null);
   const [remindGroup, setRemindGroup] = useState(null); // { customer, tickets }
+  const [quickFollowUpFor, setQuickFollowUpFor] = useState(null); // ticket
+  const [editingTicket, setEditingTicket] = useState(null); // ticket
+  const [closingTicket, setClosingTicket] = useState(null); // ticket
 
   const productName = (id) => products.find((p) => p.id === id)?.qualityName || "—";
 
@@ -150,35 +155,60 @@ export default function Tickets() {
                 </div>
               </div>
 
-              <div className="flex flex-col divide-y divide-line -mx-1">
+              <div className="flex flex-col gap-2">
                 {customerTickets.map((t) => {
                   const staleDays = daysBetween(lastTouchedDate(t.id, t.date));
                   const isOpenQuery = OPEN_STAGES.includes(t.stage);
                   const isStale = isOpenQuery && staleDays >= 7;
+                  const followUpCount = followups.filter((f) => f.ticketId === t.id).length;
                   return (
-                    <button
+                    <div
                       key={t.id}
-                      onClick={() => setOpenTicket(t)}
-                      className={`text-left px-1 py-2.5 hover:bg-paper rounded-lg transition flex items-center justify-between gap-3 ${isStale ? "bg-rust/5" : ""}`}
+                      className={`border rounded-xl p-3 ${isStale ? "border-rust/30 bg-rust/5" : "border-line"}`}
                     >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono text-xs text-muted">{t.ticketNumber}</span>
-                          <StageBadge stage={t.stage} />
-                          {isStale && (
-                            <span className="text-[10px] font-semibold text-rust bg-rust/10 border border-rust/30 rounded-full px-1.5 py-0.5">
-                              No contact {staleDays}d
-                            </span>
-                          )}
+                      <button onClick={() => setOpenTicket(t)} className="w-full text-left flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-xs text-muted">{t.ticketNumber}</span>
+                            <StageBadge stage={t.stage} />
+                            {isStale && (
+                              <span className="text-[10px] font-semibold text-rust bg-rust/10 border border-rust/30 rounded-full px-1.5 py-0.5">
+                                {isOpenQuery ? `${staleDays}d open, no contact` : ""}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-sm font-medium mt-0.5">{productName(t.productId)} · {t.shade}</div>
+                          <div className="text-xs text-muted">{formatDate(t.date)} · Follow-ups: {followUpCount}</div>
                         </div>
-                        <div className="text-sm font-medium mt-0.5">{productName(t.productId)} · {t.shade}</div>
-                        <div className="text-xs text-muted">{formatDate(t.date)}</div>
+                        <div className="text-right shrink-0">
+                          <div className="text-[10px] text-muted uppercase tracking-wide">Probability</div>
+                          <div className="font-display font-bold text-sm text-thread">{ticketProbability(t, followups)}%</div>
+                        </div>
+                      </button>
+
+                      <div className="flex flex-wrap gap-1.5 mt-2.5">
+                        <ActionBtn tone="violet" onClick={() => setQuickFollowUpFor(t)}>↻ Follow-up</ActionBtn>
+                        {customer.whatsapp && (
+                          <ActionBtn tone="loom" as="a" href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage("sampleReminder", customer, t))} target="_blank" rel="noreferrer">
+                            💬 WA
+                          </ActionBtn>
+                        )}
+                        {customer.phone && (
+                          <ActionBtn tone="ink2" as="a" href={`tel:${customer.phone.replace(/\D/g, "")}`}>📞 Call</ActionBtn>
+                        )}
+                        {isOpenQuery ? (
+                          <ActionBtn tone="loom" onClick={() => setClosingTicket(t)}>✔ Close</ActionBtn>
+                        ) : (
+                          <ActionBtn tone="muted" disabled>✔ Closed</ActionBtn>
+                        )}
+                        <ActionBtn tone="ink2" onClick={() => setEditingTicket(t)}>✎ Edit</ActionBtn>
+                        {permissions?.canDelete && (
+                          <ActionBtn tone="rust" onClick={() => { if (confirm(`Delete ticket ${t.ticketNumber}? This can't be undone.`)) removeTicket(t.id); }}>
+                            🗑 Delete
+                          </ActionBtn>
+                        )}
                       </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-[10px] text-muted uppercase tracking-wide">Probability</div>
-                        <div className="font-display font-bold text-sm text-thread">{ticketProbability(t, followups)}%</div>
-                      </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -189,6 +219,40 @@ export default function Tickets() {
           <div className="text-center py-12 text-muted text-sm">No tickets in this view.</div>
         )}
       </div>
+
+      <Modal open={!!quickFollowUpFor} onClose={() => setQuickFollowUpFor(null)} title={`Follow-up — ${quickFollowUpFor?.ticketNumber || ""}`}>
+        {quickFollowUpFor && (
+          <FollowUpForm
+            ticketId={quickFollowUpFor.id}
+            onSave={async (f) => { await saveFollowUp(f); setQuickFollowUpFor(null); }}
+            onCancel={() => setQuickFollowUpFor(null)}
+          />
+        )}
+      </Modal>
+
+      <Modal open={!!editingTicket} onClose={() => setEditingTicket(null)} title={`Edit ${editingTicket?.ticketNumber || ""}`} wide>
+        {editingTicket && (
+          <TicketEditForm
+            ticket={editingTicket}
+            customers={customers}
+            products={products}
+            onCreateCustomer={async (c) => saveCustomer(c)}
+            onCreateProduct={async (p) => saveProduct(p)}
+            onSave={async (form) => { await saveTicket(form); setEditingTicket(null); }}
+            onCancel={() => setEditingTicket(null)}
+          />
+        )}
+      </Modal>
+
+      <Modal open={!!closingTicket} onClose={() => setClosingTicket(null)} title={`Close Query — ${closingTicket?.ticketNumber || ""}`}>
+        {closingTicket && (
+          <QuickClosePanel
+            ticket={closingTicket}
+            onClose={async (patch) => { await saveTicket({ ...closingTicket, ...patch }); setClosingTicket(null); }}
+            onCancel={() => setClosingTicket(null)}
+          />
+        )}
+      </Modal>
 
       <Modal open={creatingTicket} onClose={() => setCreatingTicket(false)} title="New Sample Ticket" wide>
         {creatingTicket && (
@@ -231,6 +295,78 @@ export default function Tickets() {
           />
         )}
       </Modal>
+    </div>
+  );
+}
+
+const ACTION_TONES = {
+  violet: "bg-violet-500/10 text-violet-700 border-violet-500/30 hover:bg-violet-500/20",
+  loom: "bg-loom/10 text-loom border-loom/30 hover:bg-loom/20",
+  ink2: "bg-ink2/10 text-ink2 border-ink2/30 hover:bg-ink2/20",
+  rust: "bg-rust/10 text-rust border-rust/30 hover:bg-rust/20",
+  muted: "bg-muted/10 text-muted border-muted/30",
+};
+
+function ActionBtn({ tone = "ink2", as = "button", children, disabled, ...props }) {
+  const Tag = as;
+  return (
+    <Tag
+      {...props}
+      disabled={as === "button" ? disabled : undefined}
+      className={`text-xs font-semibold px-2.5 py-1.5 rounded-full border whitespace-nowrap ${ACTION_TONES[tone]} ${disabled ? "opacity-50 pointer-events-none" : ""}`}
+    >
+      {children}
+    </Tag>
+  );
+}
+
+function QuickClosePanel({ ticket, onClose, onCancel }) {
+  const [result, setResult] = useState(null); // "won" | "lost"
+  const [orderValue, setOrderValue] = useState("");
+  const [note, setNote] = useState("");
+
+  if (!result) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-muted">Did this sample convert to an order?</p>
+        <div className="flex gap-2">
+          <button onClick={() => setResult("won")} className="flex-1 py-3 rounded-lg text-sm font-semibold bg-loom text-white hover:opacity-90">
+            ✔ Order Won
+          </button>
+          <button onClick={() => setResult("lost")} className="flex-1 py-3 rounded-lg text-sm font-semibold bg-rust text-white hover:opacity-90">
+            ✕ Didn't Convert
+          </button>
+        </div>
+        <button onClick={onCancel} className="text-xs text-muted hover:underline self-center mt-1">Cancel</button>
+      </div>
+    );
+  }
+
+  const isWon = result === "won";
+  return (
+    <div className="flex flex-col gap-3">
+      {isWon && (
+        <Field label="Order Value (₹, optional)">
+          <TextInput type="number" value={orderValue} onChange={(e) => setOrderValue(e.target.value)} placeholder="e.g. 45000" />
+        </Field>
+      )}
+      <Field label={isWon ? "Notes (quantity, terms, etc.)" : "Reason (shade/price/quality/timing…)"}>
+        <TextArea value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
+      </Field>
+      <div className="flex justify-end gap-2">
+        <button onClick={() => setResult(null)} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Back</button>
+        <button
+          onClick={() => onClose({
+            stage: isWon ? "Bulk Order" : "Lost",
+            closureNote: note,
+            orderValue: isWon ? orderValue : "",
+            closedAt: new Date().toISOString(),
+          })}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold text-white ${isWon ? "bg-loom" : "bg-rust"} hover:opacity-90`}
+        >
+          Confirm & Close
+        </button>
+      </div>
     </div>
   );
 }
