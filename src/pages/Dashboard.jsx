@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
+import { CalendarClock, AlarmClockOff, PackageSearch, TrendingUp } from "lucide-react";
 import { useCustomers, useProducts, useTickets, useFollowUps, useInventory } from "../context/domains.jsx";
 import KpiCard from "../components/KpiCard.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
@@ -61,10 +62,10 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-        <KpiCard label="Today's Follow-ups" value={stats.todaysFollowups.length} tone="thread" />
-        <KpiCard label="Overdue Follow-ups" value={stats.overdueFollowups.length} tone="rust" />
-        <KpiCard label="Pending Samples" value={stats.pendingSamples.length} tone="ink" />
-        <KpiCard label="Conversion %" value={`${stats.conversion}%`} tone="loom" sub={`${stats.won.length} won · ${stats.lost.length} lost`} />
+        <KpiCard label="Today's Follow-ups" value={stats.todaysFollowups.length} tone="thread" icon={CalendarClock} />
+        <KpiCard label="Overdue Follow-ups" value={stats.overdueFollowups.length} tone="rust" icon={AlarmClockOff} />
+        <KpiCard label="Pending Samples" value={stats.pendingSamples.length} tone="ink" icon={PackageSearch} />
+        <KpiCard label="Conversion %" value={`${stats.conversion}%`} tone="loom" sub={`${stats.won.length} won · ${stats.lost.length} lost`} icon={TrendingUp} />
       </div>
 
       <div className="grid sm:grid-cols-2 gap-4">

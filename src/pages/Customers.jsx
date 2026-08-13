@@ -2,22 +2,20 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useCustomers, useTickets, useFollowUps } from "../context/domains.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useConfirm } from "../context/ConfirmContext.jsx";
+import { useToast } from "../context/ToastContext.jsx";
 import { CustomerStatusBadge, TemperatureBadge } from "../components/StatusBadge.jsx";
 import Modal from "../components/Modal.jsx";
 import MasterTabs from "../components/MasterTabs.jsx";
 import SearchDropdown from "../components/SearchDropdown.jsx";
-import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx";
-import { CUSTOMER_STATUS, CUSTOMER_CATEGORY } from "../data/schema";
+import CustomerForm, { BLANK_CUSTOMER } from "../components/CustomerForm.jsx";
+import { CUSTOMER_STATUS } from "../data/schema";
 import { scoreCustomer, scoreTemperature } from "../utils/scoring";
-
-const BLANK = {
-  name: "", company: "", city: "", state: "", country: "India",
-  buyerName: "", phone: "", whatsapp: "", email: "", category: "Manufacturer",
-  status: "Potential", preferredFabric: "", creditDays: "", remarks: "",
-};
 
 export default function Customers() {
   const { items: customers, save, remove } = useCustomers();
+  const confirmDialog = useConfirm();
+  const showToast = useToast();
   const { items: tickets } = useTickets();
   const { items: followups } = useFollowUps();
   const { permissions } = useAuth();
@@ -45,8 +43,10 @@ export default function Customers() {
   }, [filtered, query]);
 
   const handleSave = async (form) => {
+    const isNew = !form.id;
     await save(form);
     setEditing(null);
+    showToast(isNew ? `${form.name} added.` : `${form.name} updated.`, "success");
   };
 
   const toggleSelectMode = () => {
@@ -64,8 +64,10 @@ export default function Customers() {
   const clearSelection = () => setSelected(new Set());
 
   const bulkDelete = async () => {
-    if (!confirm(`Remove ${selected.size} selected customer(s)? This can't be undone.`)) return;
+    const ok = await confirmDialog(`Remove ${selected.size} selected customer(s)? This can't be undone.`);
+    if (!ok) return;
     for (const id of selected) await remove(id);
+    showToast(`${selected.size} customer(s) removed.`, "success");
     setSelected(new Set());
   };
 
@@ -74,6 +76,7 @@ export default function Customers() {
       const c = customers.find((cc) => cc.id === id);
       if (c) await save({ ...c, status });
     }
+    showToast(`${selected.size} customer(s) set to ${status}.`, "success");
     setSelected(new Set());
   };
 
@@ -94,7 +97,7 @@ export default function Customers() {
             {selectMode ? "Cancel" : "Select"}
           </button>
           <button
-            onClick={() => setEditing({ ...BLANK })}
+            onClick={() => setEditing({ ...BLANK_CUSTOMER })}
             className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-ink2 transition"
           >
             + Add Customer
@@ -195,7 +198,10 @@ export default function Customers() {
               </button>
               {permissions?.canDelete && (
                 <button
-                  onClick={() => { if (confirm(`Remove ${c.name}?`)) remove(c.id); }}
+                  onClick={async () => {
+                    const ok = await confirmDialog(`Remove ${c.name}?`);
+                    if (ok) { await remove(c.id); showToast(`${c.name} removed.`, "success"); }
+                  }}
                   className="text-xs font-semibold text-rust hover:underline ml-auto"
                 >
                   Remove
@@ -217,43 +223,3 @@ export default function Customers() {
   );
 }
 
-function CustomerForm({ initial, onSave, onCancel }) {
-  const [form, setForm] = useState(initial);
-  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
-
-  return (
-    <form
-      onSubmit={(e) => { e.preventDefault(); onSave(form); }}
-      className="grid sm:grid-cols-2 gap-3"
-    >
-      <Field label="Customer Name *"><TextInput required value={form.name} onChange={set("name")} /></Field>
-      <Field label="Company"><TextInput value={form.company} onChange={set("company")} /></Field>
-      <Field label="City"><TextInput value={form.city} onChange={set("city")} /></Field>
-      <Field label="State"><TextInput value={form.state} onChange={set("state")} /></Field>
-      <Field label="Buyer Name"><TextInput value={form.buyerName} onChange={set("buyerName")} /></Field>
-      <Field label="Category">
-        <Select options={CUSTOMER_CATEGORY} value={form.category} onChange={set("category")} />
-      </Field>
-      <Field label="Phone"><TextInput value={form.phone} onChange={set("phone")} /></Field>
-      <Field label="WhatsApp"><TextInput value={form.whatsapp} onChange={set("whatsapp")} /></Field>
-      <Field label="Email"><TextInput type="email" value={form.email} onChange={set("email")} /></Field>
-      <Field label="Preferred Fabric"><TextInput value={form.preferredFabric} onChange={set("preferredFabric")} /></Field>
-      <Field label="Credit Days"><TextInput type="number" value={form.creditDays} onChange={set("creditDays")} /></Field>
-      <Field label="Status">
-        <Select options={CUSTOMER_STATUS} value={form.status} onChange={set("status")} />
-      </Field>
-      <Field label="Remarks" className="sm:col-span-2">
-        <TextArea value={form.remarks} onChange={set("remarks")} />
-      </Field>
-
-      <div className="sm:col-span-2 flex justify-end gap-2 mt-2">
-        <button type="button" onClick={onCancel} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">
-          Cancel
-        </button>
-        <button type="submit" className="px-4 py-2 rounded-lg text-sm font-semibold bg-ink text-white hover:bg-ink2">
-          Save Customer
-        </button>
-      </div>
-    </form>
-  );
-}

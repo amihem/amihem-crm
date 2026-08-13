@@ -8,6 +8,8 @@ import Products from "./pages/Products.jsx";
 import Login from "./pages/Login.jsx";
 import { AppProviders } from "./context/domains.jsx";
 import { AuthProvider, useAuth } from "./context/AuthContext.jsx";
+import { ToastProvider } from "./context/ToastContext.jsx";
+import { ConfirmProvider } from "./context/ConfirmContext.jsx";
 import * as dataService from "./services/dataService";
 import { buildSeed } from "./data/seed";
 
@@ -18,7 +20,11 @@ const Inventory = lazy(() => import("./pages/Inventory.jsx"));
 const Reports = lazy(() => import("./pages/Reports.jsx"));
 
 function PageLoader() {
-  return <div className="text-sm text-muted py-10 text-center">Loading…</div>;
+  return (
+    <div className="flex items-center justify-center py-16">
+      <div className="w-6 h-6 border-2 border-line border-t-ink2 rounded-full animate-spin" />
+    </div>
+  );
 }
 
 function AuthedApp() {
@@ -29,23 +35,27 @@ function AuthedApp() {
 
   return (
     <AppProviders>
-      <HashRouter>
-        <Suspense fallback={<PageLoader />}>
-          <Routes>
-            <Route element={<AppShell />}>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/customers" element={<Customers />} />
-              <Route path="/customers/:id" element={<CustomerDetail />} />
-              <Route path="/products" element={<Products />} />
-              <Route path="/tickets" element={<Tickets />} />
-              <Route path="/analytics" element={<Analytics />} />
-              <Route path="/reports" element={<Reports />} />
-              <Route path="/inventory" element={<Inventory />} />
-              <Route path="/settings" element={<Settings />} />
-            </Route>
-          </Routes>
-        </Suspense>
-      </HashRouter>
+      <ToastProvider>
+        <ConfirmProvider>
+          <HashRouter>
+            <Suspense fallback={<PageLoader />}>
+              <Routes>
+                <Route element={<AppShell />}>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/customers" element={<Customers />} />
+                  <Route path="/customers/:id" element={<CustomerDetail />} />
+                  <Route path="/products" element={<Products />} />
+                  <Route path="/tickets" element={<Tickets />} />
+                  <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/reports" element={<Reports />} />
+                  <Route path="/inventory" element={<Inventory />} />
+                  <Route path="/settings" element={<Settings />} />
+                </Route>
+              </Routes>
+            </Suspense>
+          </HashRouter>
+        </ConfirmProvider>
+      </ToastProvider>
     </AppProviders>
   );
 }
@@ -75,7 +85,11 @@ function App() {
 
   if (!ready) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-paper">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-paper gap-4">
+        <div className="w-14 h-14 rounded-2xl bg-ink flex items-center justify-center">
+          <span className="text-white font-display font-extrabold text-xl">A</span>
+        </div>
+        <div className="w-6 h-6 border-2 border-line border-t-ink2 rounded-full animate-spin" />
         <span className="text-muted text-sm font-body">Loading Amihem CRM…</span>
       </div>
     );

@@ -1,20 +1,18 @@
 import { useMemo, useState } from "react";
 import { useProducts } from "../context/domains.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useConfirm } from "../context/ConfirmContext.jsx";
+import { useToast } from "../context/ToastContext.jsx";
 import Modal from "../components/Modal.jsx";
 import MasterTabs from "../components/MasterTabs.jsx";
 import SearchDropdown from "../components/SearchDropdown.jsx";
-import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx";
-import { PRODUCT_CATEGORY } from "../data/schema";
-
-const BLANK = {
-  category: "Cotton", subCategory: "", qualityName: "", construction: "",
-  composition: "", gsm: "", width: "", millName: "", colour: "", moq: "", price: "", remarks: "",
-};
+import ProductForm, { BLANK_PRODUCT } from "../components/ProductForm.jsx";
 
 export default function Products() {
   const { items: products, save, remove } = useProducts();
   const { permissions } = useAuth();
+  const confirmDialog = useConfirm();
+  const showToast = useToast();
   const [editing, setEditing] = useState(null);
   const [query, setQuery] = useState("");
   const [selectMode, setSelectMode] = useState(false);
@@ -45,8 +43,10 @@ export default function Products() {
   const selectAll = () => setSelected(new Set(filtered.map((p) => p.id)));
   const clearSelection = () => setSelected(new Set());
   const bulkDelete = async () => {
-    if (!confirm(`Remove ${selected.size} selected product(s)? This can't be undone.`)) return;
+    const ok = await confirmDialog(`Remove ${selected.size} selected product(s)? This can't be undone.`);
+    if (!ok) return;
     for (const id of selected) await remove(id);
+    showToast(`${selected.size} product(s) removed.`, "success");
     setSelected(new Set());
   };
 
@@ -67,7 +67,7 @@ export default function Products() {
             {selectMode ? "Cancel" : "Select"}
           </button>
           <button
-            onClick={() => setEditing({ ...BLANK })}
+            onClick={() => setEditing({ ...BLANK_PRODUCT })}
             className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-ink2 transition"
           >
             + Add Product
@@ -130,7 +130,10 @@ export default function Products() {
                   <button onClick={() => setEditing(p)} className="text-xs font-semibold text-ink2 hover:underline mr-3">Edit</button>
                   {permissions?.canDelete && (
                     <button
-                      onClick={() => { if (confirm(`Remove ${p.qualityName}?`)) remove(p.id); }}
+                      onClick={async () => {
+                        const ok = await confirmDialog(`Remove ${p.qualityName}?`);
+                        if (ok) { await remove(p.id); showToast(`${p.qualityName} removed.`, "success"); }
+                      }}
                       className="text-xs font-semibold text-rust hover:underline"
                     >
                       Remove
@@ -150,7 +153,7 @@ export default function Products() {
         {editing && (
           <ProductForm
             initial={editing}
-            onSave={async (form) => { await save(form); setEditing(null); }}
+            onSave={async (form) => { const isNew = !form.id; await save(form); setEditing(null); showToast(isNew ? `${form.qualityName} added.` : `${form.qualityName} updated.`, "success"); }}
             onCancel={() => setEditing(null)}
           />
         )}
@@ -159,30 +162,3 @@ export default function Products() {
   );
 }
 
-function ProductForm({ initial, onSave, onCancel }) {
-  const [form, setForm] = useState(initial);
-  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
-
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(form); }} className="grid sm:grid-cols-2 gap-3">
-      <Field label="Quality Name *"><TextInput required value={form.qualityName} onChange={set("qualityName")} /></Field>
-      <Field label="Category">
-        <Select options={PRODUCT_CATEGORY} value={form.category} onChange={set("category")} />
-      </Field>
-      <Field label="Construction"><TextInput value={form.construction} onChange={set("construction")} /></Field>
-      <Field label="Composition"><TextInput value={form.composition} onChange={set("composition")} /></Field>
-      <Field label="GSM"><TextInput value={form.gsm} onChange={set("gsm")} /></Field>
-      <Field label="Width (inch)"><TextInput value={form.width} onChange={set("width")} /></Field>
-      <Field label="Mill Name"><TextInput value={form.millName} onChange={set("millName")} /></Field>
-      <Field label="Colour"><TextInput value={form.colour} onChange={set("colour")} /></Field>
-      <Field label="MOQ"><TextInput value={form.moq} onChange={set("moq")} /></Field>
-      <Field label="Price (₹)"><TextInput value={form.price} onChange={set("price")} /></Field>
-      <Field label="Remarks" className="sm:col-span-2"><TextArea value={form.remarks} onChange={set("remarks")} /></Field>
-
-      <div className="sm:col-span-2 flex justify-end gap-2 mt-2">
-        <button type="button" onClick={onCancel} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Cancel</button>
-        <button type="submit" className="px-4 py-2 rounded-lg text-sm font-semibold bg-ink text-white hover:bg-ink2">Save Product</button>
-      </div>
-    </form>
-  );
-}

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useCustomers, useProducts, useTickets, useFollowUps } from "../context/domains.jsx";
+import { useToast } from "../context/ToastContext.jsx";
 import { toCSV, downloadCSV, buildPDF, downloadBlob, shareOrDownloadPDF } from "../utils/helpers";
 import { LOST_STAGES } from "../data/schema";
 
@@ -8,6 +9,7 @@ export default function Reports() {
   const { items: products } = useProducts();
   const { items: tickets } = useTickets();
   const { items: followups } = useFollowUps();
+  const showToast = useToast();
   const [busy, setBusy] = useState(null); // report title currently generating
 
   const customerName = (id) => customers.find((c) => c.id === id)?.name || "—";
@@ -72,6 +74,7 @@ export default function Reports() {
 
   const handleCSV = (report) => {
     downloadCSV(`${slug(report.title)}.csv`, toCSV(report.rows(), report.columns));
+    showToast(`${report.title} exported as CSV.`, "success");
   };
 
   const handlePDF = async (report) => {
@@ -79,6 +82,7 @@ export default function Reports() {
     try {
       const blob = await buildPDF(report.title, report.rows(), report.columns);
       downloadBlob(`${slug(report.title)}.pdf`, blob);
+      showToast(`${report.title} exported as PDF.`, "success");
     } finally {
       setBusy(null);
     }
@@ -90,7 +94,9 @@ export default function Reports() {
       const blob = await buildPDF(report.title, report.rows(), report.columns);
       const result = await shareOrDownloadPDF(`${slug(report.title)}.pdf`, blob);
       if (result === "downloaded") {
-        alert("Your device doesn't support direct sharing — the PDF downloaded instead. Attach it in WhatsApp manually.");
+        showToast("Sharing isn't supported here — the PDF downloaded instead. Attach it in WhatsApp manually.", "info");
+      } else {
+        showToast("Shared.", "success");
       }
     } finally {
       setBusy(null);

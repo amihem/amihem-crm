@@ -1,10 +1,13 @@
+import { RefreshCw, MessageCircle, Phone, CheckCircle2, Pencil, Trash2, Search, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useCustomers, useProducts, useTickets, useFollowUps, useAttachments } from "../context/domains.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useConfirm } from "../context/ConfirmContext.jsx";
+import { useToast } from "../context/ToastContext.jsx";
 import Modal from "../components/Modal.jsx";
 import EntitySearchField from "../components/EntitySearchField.jsx";
-import QuickAddCustomer from "../components/QuickAddCustomer.jsx";
-import QuickAddProduct from "../components/QuickAddProduct.jsx";
+import CustomerForm, { BLANK_CUSTOMER } from "../components/CustomerForm.jsx";
+import ProductForm, { BLANK_PRODUCT } from "../components/ProductForm.jsx";
 import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
 import { formatDate, isOverdue, nextTicketNumbers, daysBetween, newId } from "../utils/helpers";
@@ -22,6 +25,8 @@ export default function Tickets() {
   const { items: tickets, save: saveTicket, remove: removeTicket } = useTickets();
   const { items: followups, save: saveFollowUp } = useFollowUps();
   const { permissions } = useAuth();
+  const confirmDialog = useConfirm();
+  const showToast = useToast();
   const [stageFilter, setStageFilter] = useState("");
   const [queryFilter, setQueryFilter] = useState("open"); // open | closed | all
   const [creatingTicket, setCreatingTicket] = useState(false);
@@ -187,24 +192,37 @@ export default function Tickets() {
                       </button>
 
                       <div className="flex flex-wrap gap-1.5 mt-2.5">
-                        <ActionBtn tone="violet" onClick={() => setQuickFollowUpFor(t)}>↻ Follow-up</ActionBtn>
+                        <ActionBtn tone="violet" onClick={() => setQuickFollowUpFor(t)}>
+                          <RefreshCw size={12} /> Follow-up
+                        </ActionBtn>
                         {customer.whatsapp && (
                           <ActionBtn tone="loom" as="a" href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage("sampleReminder", customer, t))} target="_blank" rel="noreferrer">
-                            💬 WA
+                            <MessageCircle size={12} /> WA
                           </ActionBtn>
                         )}
                         {customer.phone && (
-                          <ActionBtn tone="ink2" as="a" href={`tel:${customer.phone.replace(/\D/g, "")}`}>📞 Call</ActionBtn>
+                          <ActionBtn tone="ink2" as="a" href={`tel:${customer.phone.replace(/\D/g, "")}`}>
+                            <Phone size={12} /> Call
+                          </ActionBtn>
                         )}
                         {isOpenQuery ? (
-                          <ActionBtn tone="loom" onClick={() => setClosingTicket(t)}>✔ Close</ActionBtn>
+                          <ActionBtn tone="loom" onClick={() => setClosingTicket(t)}>
+                            <CheckCircle2 size={12} /> Close
+                          </ActionBtn>
                         ) : (
-                          <ActionBtn tone="muted" disabled>✔ Closed</ActionBtn>
+                          <ActionBtn tone="muted" disabled>
+                            <CheckCircle2 size={12} /> Closed
+                          </ActionBtn>
                         )}
-                        <ActionBtn tone="ink2" onClick={() => setEditingTicket(t)}>✎ Edit</ActionBtn>
+                        <ActionBtn tone="ink2" onClick={() => setEditingTicket(t)}>
+                          <Pencil size={12} /> Edit
+                        </ActionBtn>
                         {permissions?.canDelete && (
-                          <ActionBtn tone="rust" onClick={() => { if (confirm(`Delete ticket ${t.ticketNumber}? This can't be undone.`)) removeTicket(t.id); }}>
-                            🗑 Delete
+                          <ActionBtn tone="rust" onClick={async () => {
+                            const ok = await confirmDialog(`Delete ticket ${t.ticketNumber}? This can't be undone.`);
+                            if (ok) { await removeTicket(t.id); showToast(`${t.ticketNumber} deleted.`, "success"); }
+                          }}>
+                            <Trash2 size={12} /> Delete
                           </ActionBtn>
                         )}
                       </div>
@@ -248,7 +266,16 @@ export default function Tickets() {
         {closingTicket && (
           <QuickClosePanel
             ticket={closingTicket}
-            onClose={async (patch) => { await saveTicket({ ...closingTicket, ...patch }); setClosingTicket(null); }}
+            onClose={async (patch) => {
+              try {
+                await saveTicket({ ...closingTicket, ...patch });
+                setClosingTicket(null);
+                setQueryFilter("closed"); // otherwise the ticket just vanishes from "Open" with no visible confirmation
+                showToast(`${closingTicket.ticketNumber} closed — moved to Closed tab.`, "success");
+              } catch (err) {
+                showToast(`Couldn't close this query: ${err.message || err}`, "error");
+              }
+            }}
             onCancel={() => setClosingTicket(null)}
           />
         )}
@@ -312,6 +339,7 @@ function ActionBtn({ tone = "ink2", as = "button", children, disabled, ...props 
   return (
     <Tag
       {...props}
+      type={as === "button" ? (props.type || "button") : undefined}
       disabled={as === "button" ? disabled : undefined}
       className={`text-xs font-semibold px-2.5 py-1.5 rounded-full border whitespace-nowrap ${ACTION_TONES[tone]} ${disabled ? "opacity-50 pointer-events-none" : ""}`}
     >
@@ -324,25 +352,42 @@ function QuickClosePanel({ ticket, onClose, onCancel }) {
   const [result, setResult] = useState(null); // "won" | "lost"
   const [orderValue, setOrderValue] = useState("");
   const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
 
   if (!result) {
     return (
       <div className="flex flex-col gap-3">
         <p className="text-sm text-muted">Did this sample convert to an order?</p>
         <div className="flex gap-2">
-          <button onClick={() => setResult("won")} className="flex-1 py-3 rounded-lg text-sm font-semibold bg-loom text-white hover:opacity-90">
+          <button type="button" onClick={() => setResult("won")} className="flex-1 py-3 rounded-lg text-sm font-semibold bg-loom text-white hover:opacity-90">
             ✔ Order Won
           </button>
-          <button onClick={() => setResult("lost")} className="flex-1 py-3 rounded-lg text-sm font-semibold bg-rust text-white hover:opacity-90">
+          <button type="button" onClick={() => setResult("lost")} className="flex-1 py-3 rounded-lg text-sm font-semibold bg-rust text-white hover:opacity-90">
             ✕ Didn't Convert
           </button>
         </div>
-        <button onClick={onCancel} className="text-xs text-muted hover:underline self-center mt-1">Cancel</button>
+        <button type="button" onClick={onCancel} className="text-xs text-muted hover:underline self-center mt-1">Cancel</button>
       </div>
     );
   }
 
   const isWon = result === "won";
+
+  const handleConfirm = async () => {
+    if (saving) return; // guard against double-tap firing this twice
+    setSaving(true);
+    try {
+      await onClose({
+        stage: isWon ? "Bulk Order" : "Lost",
+        closureNote: note,
+        orderValue: isWon ? orderValue : "",
+        closedAt: new Date().toISOString(),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3">
       {isWon && (
@@ -354,17 +399,14 @@ function QuickClosePanel({ ticket, onClose, onCancel }) {
         <TextArea value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
       </Field>
       <div className="flex justify-end gap-2">
-        <button onClick={() => setResult(null)} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Back</button>
+        <button type="button" onClick={() => setResult(null)} disabled={saving} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper disabled:opacity-50">Back</button>
         <button
-          onClick={() => onClose({
-            stage: isWon ? "Bulk Order" : "Lost",
-            closureNote: note,
-            orderValue: isWon ? orderValue : "",
-            closedAt: new Date().toISOString(),
-          })}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold text-white ${isWon ? "bg-loom" : "bg-rust"} hover:opacity-90`}
+          type="button"
+          onClick={handleConfirm}
+          disabled={saving}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold text-white ${isWon ? "bg-loom" : "bg-rust"} hover:opacity-90 disabled:opacity-60`}
         >
-          Confirm & Close
+          {saving ? "Saving…" : "Confirm & Close"}
         </button>
       </div>
     </div>
@@ -572,11 +614,11 @@ function NewTicketForm({ customers, products, existingTickets, onCreateCustomer,
         </button>
       </div>
 
-      <Modal open={quickAdd === "customer"} onClose={() => setQuickAdd(null)} title="Add New Customer">
-        <QuickAddCustomer onSave={handleCreateCustomer} onCancel={() => setQuickAdd(null)} />
+      <Modal open={quickAdd === "customer"} onClose={() => setQuickAdd(null)} title="Add New Customer" wide>
+        <CustomerForm initial={BLANK_CUSTOMER} onSave={handleCreateCustomer} onCancel={() => setQuickAdd(null)} />
       </Modal>
-      <Modal open={!!quickAdd?.row} onClose={() => setQuickAdd(null)} title="Add New Product">
-        <QuickAddProduct onSave={handleCreateProduct} onCancel={() => setQuickAdd(null)} />
+      <Modal open={!!quickAdd?.row} onClose={() => setQuickAdd(null)} title="Add New Product" wide>
+        <ProductForm initial={BLANK_PRODUCT} onSave={handleCreateProduct} onCancel={() => setQuickAdd(null)} />
       </Modal>
     </form>
   );
@@ -586,6 +628,7 @@ function NewTicketForm({ customers, products, existingTickets, onCreateCustomer,
 function TicketDetail({ ticket, customer, product, customers, products, onCreateCustomer, onCreateProduct, onUpdate }) {
   const { items: allFollowUps, save: saveFollowUp } = useFollowUps();
   const { items: allAttachments, save: saveAttachment, remove: removeAttachment } = useAttachments();
+  const confirmDialog = useConfirm();
   const [addingFollowUp, setAddingFollowUp] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [closureNote, setClosureNote] = useState(ticket.closureNote || "");
@@ -778,7 +821,7 @@ function TicketDetail({ ticket, customer, product, customers, products, onCreate
                 <img src={a.dataUrl} alt={a.label} className="w-full aspect-square object-cover rounded-lg border border-line" />
                 <div className="absolute inset-x-0 bottom-0 bg-ink/70 text-white text-[10px] px-1.5 py-1 rounded-b-lg truncate">{a.label}</div>
                 <button
-                  onClick={() => { if (confirm("Remove this photo?")) removeAttachment(a.id); }}
+                  onClick={async () => { const ok = await confirmDialog("Remove this photo?"); if (ok) removeAttachment(a.id); }}
                   className="absolute top-1 right-1 w-5 h-5 rounded-full bg-ink/70 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
                   aria-label="Remove photo"
                 >
@@ -867,11 +910,11 @@ function TicketEditForm({ ticket, customers, products, onCreateCustomer, onCreat
         <button type="submit" className="px-4 py-2 rounded-lg text-sm font-semibold bg-ink text-white hover:bg-ink2">Save Changes</button>
       </div>
 
-      <Modal open={quickAdd === "customer"} onClose={() => setQuickAdd(null)} title="Add New Customer">
-        <QuickAddCustomer onSave={handleCreateCustomer} onCancel={() => setQuickAdd(null)} />
+      <Modal open={quickAdd === "customer"} onClose={() => setQuickAdd(null)} title="Add New Customer" wide>
+        <CustomerForm initial={BLANK_CUSTOMER} onSave={handleCreateCustomer} onCancel={() => setQuickAdd(null)} />
       </Modal>
-      <Modal open={quickAdd === "product"} onClose={() => setQuickAdd(null)} title="Add New Product">
-        <QuickAddProduct onSave={handleCreateProduct} onCancel={() => setQuickAdd(null)} />
+      <Modal open={quickAdd === "product"} onClose={() => setQuickAdd(null)} title="Add New Product" wide>
+        <ProductForm initial={BLANK_PRODUCT} onSave={handleCreateProduct} onCancel={() => setQuickAdd(null)} />
       </Modal>
     </form>
   );

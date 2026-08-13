@@ -1,5 +1,7 @@
 import { useRef, useState } from "react";
+import { FileSpreadsheet, CloudUpload, Share2, Undo2, LogOut } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useConfirm } from "../context/ConfirmContext.jsx";
 import { useCustomers, useProducts, useTickets, useFollowUps } from "../context/domains.jsx";
 import { activeBackend } from "../services/dataService";
 import { buildSeed } from "../data/seed";
@@ -10,6 +12,7 @@ import {
 
 export default function Settings() {
   const { session, logout } = useAuth();
+  const confirmDialog = useConfirm();
   const { items: customers, save: saveCustomer } = useCustomers();
   const { items: products, save: saveProduct } = useProducts();
   const { save: saveTicket } = useTickets();
@@ -41,7 +44,11 @@ export default function Settings() {
   const handleRestore = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!confirm("Restoring will merge this backup into your current data (existing records with matching IDs get overwritten). Continue?")) {
+    const ok = await confirmDialog(
+      "Restoring will merge this backup into your current data (existing records with matching IDs get overwritten). Continue?",
+      { danger: false }
+    );
+    if (!ok) {
       e.target.value = "";
       return;
     }
@@ -128,11 +135,11 @@ export default function Settings() {
       </div>
 
       <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-        <ToolbarTile icon="📊" label="Excel" tone="loom" onClick={handleExcelExport} disabled={busy} />
-        <ToolbarTile icon="☁" label="Backup" tone="ink2" onClick={exportBackup} disabled={busy} />
-        <ToolbarTile icon="↗" label="Share" tone="thread" onClick={handleShare} disabled={busy} />
-        <ToolbarTile icon="↺" label="Restore" tone="thread" onClick={() => restoreInputRef.current?.click()} disabled={busy} />
-        <ToolbarTile icon="⎋" label="Log Out" tone="rust" onClick={logout} />
+        <ToolbarTile icon={FileSpreadsheet} label="Excel" tone="loom" onClick={handleExcelExport} disabled={busy} />
+        <ToolbarTile icon={CloudUpload} label="Backup" tone="ink2" onClick={exportBackup} disabled={busy} />
+        <ToolbarTile icon={Share2} label="Share" tone="thread" onClick={handleShare} disabled={busy} />
+        <ToolbarTile icon={Undo2} label="Restore" tone="thread" onClick={() => restoreInputRef.current?.click()} disabled={busy} />
+        <ToolbarTile icon={LogOut} label="Log Out" tone="rust" onClick={logout} />
       </div>
       <input ref={restoreInputRef} type="file" accept=".json" onChange={handleRestore} className="hidden" />
 
@@ -203,14 +210,14 @@ const TILE_TONES = {
   rust: "bg-rust text-white",
 };
 
-function ToolbarTile({ icon, label, tone, onClick, disabled }) {
+function ToolbarTile({ icon: Icon, label, tone, onClick, disabled }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`flex flex-col items-center justify-center gap-1 rounded-xl py-3 text-xs font-semibold disabled:opacity-50 ${TILE_TONES[tone]}`}
+      className={`flex flex-col items-center justify-center gap-1.5 rounded-xl py-3.5 text-xs font-semibold disabled:opacity-50 ${TILE_TONES[tone]}`}
     >
-      <span className="text-lg leading-none">{icon}</span>
+      <Icon size={18} strokeWidth={2} />
       {label}
     </button>
   );

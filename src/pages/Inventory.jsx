@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useInventory, useProducts } from "../context/domains.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useConfirm } from "../context/ConfirmContext.jsx";
+import { useToast } from "../context/ToastContext.jsx";
 import Modal from "../components/Modal.jsx";
 import { Field, TextInput, Select } from "../components/FormField.jsx";
 import { LOW_STOCK_THRESHOLD } from "../data/schema";
@@ -13,6 +15,8 @@ export default function Inventory() {
   const { items: inventory, save, remove } = useInventory();
   const { items: products } = useProducts();
   const { permissions } = useAuth();
+  const confirmDialog = useConfirm();
+  const showToast = useToast();
   const [editing, setEditing] = useState(null);
 
   const productName = (id) => products.find((p) => p.id === id)?.qualityName || "—";
@@ -68,7 +72,10 @@ export default function Inventory() {
                   <td className="px-4 py-3 text-right whitespace-nowrap">
                     <button onClick={() => setEditing(i)} className="text-xs font-semibold text-ink2 hover:underline mr-3">Edit</button>
                     {permissions?.canDelete && (
-                      <button onClick={() => { if (confirm("Remove this item?")) remove(i.id); }} className="text-xs font-semibold text-rust hover:underline">
+                      <button onClick={async () => {
+                        const ok = await confirmDialog("Remove this item?");
+                        if (ok) { await remove(i.id); showToast("Item removed.", "success"); }
+                      }} className="text-xs font-semibold text-rust hover:underline">
                         Remove
                       </button>
                     )}
@@ -88,7 +95,7 @@ export default function Inventory() {
           <InventoryForm
             initial={editing}
             products={products}
-            onSave={async (form) => { await save(form); setEditing(null); }}
+            onSave={async (form) => { await save(form); setEditing(null); showToast("Inventory item saved.", "success"); }}
             onCancel={() => setEditing(null)}
           />
         )}

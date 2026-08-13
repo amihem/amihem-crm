@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Mail, Lock, User } from "lucide-react";
 import { useAuth, ROLES } from "../context/AuthContext.jsx";
 import { signIn, signUp } from "../services/supabaseAuth";
 
@@ -21,13 +22,16 @@ function LocalLogin({ onLogin }) {
         className="flex flex-col gap-4"
       >
         <Field label="Your Name">
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Rakesh"
-            required
-            className="border border-line rounded-lg px-3 py-2.5 text-sm bg-white outline-none focus:border-ink2"
-          />
+          <div className="relative">
+            <User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Rakesh"
+              required
+              className="border border-line rounded-lg pl-9 pr-3 py-2.5 text-sm bg-white outline-none focus:border-ink2 w-full"
+            />
+          </div>
         </Field>
         <Field label="Role">
           <select value={role} onChange={(e) => setRole(e.target.value)} className="border border-line rounded-lg px-3 py-2.5 text-sm bg-white outline-none focus:border-ink2">
@@ -88,12 +92,18 @@ function SupabaseLogin({ onSignedIn }) {
         </div>
 
         <Field label="Email">
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required
-            className="border border-line rounded-lg px-3 py-2.5 text-sm bg-white outline-none focus:border-ink2" />
+          <div className="relative">
+            <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required
+              className="border border-line rounded-lg pl-9 pr-3 py-2.5 text-sm bg-white outline-none focus:border-ink2 w-full" />
+          </div>
         </Field>
         <Field label="Password">
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6}
-            className="border border-line rounded-lg px-3 py-2.5 text-sm bg-white outline-none focus:border-ink2" />
+          <div className="relative">
+            <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6}
+              className="border border-line rounded-lg pl-9 pr-3 py-2.5 text-sm bg-white outline-none focus:border-ink2 w-full" />
+          </div>
         </Field>
         {mode === "signin" && (
           <Field label="Role (this device)">
@@ -116,12 +126,17 @@ function SupabaseLogin({ onSignedIn }) {
 function Shell({ children }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-paper p-4">
-      <div className="bg-panel border border-line rounded-2xl p-6 sm:p-8 w-full max-w-sm shadow-sm">
-        <div className="mb-5">
+      <div className="w-full max-w-sm">
+        <div className="flex flex-col items-center mb-6">
+          <div className="w-14 h-14 rounded-2xl bg-ink flex items-center justify-center mb-3 shadow-sm">
+            <span className="text-white font-display font-extrabold text-xl">A</span>
+          </div>
           <h1 className="font-display font-extrabold text-2xl text-ink">Amihem CRM</h1>
           <p className="text-muted text-sm mt-1">Sample → Order Conversion</p>
         </div>
-        {children}
+        <div className="bg-panel border border-line rounded-2xl p-6 sm:p-8 shadow-sm">
+          {children}
+        </div>
       </div>
     </div>
   );
