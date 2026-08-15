@@ -29,6 +29,7 @@ export default function Tickets() {
   const showToast = useToast();
   const [stageFilter, setStageFilter] = useState("");
   const [queryFilter, setQueryFilter] = useState("open"); // open | closed | all
+  const [sortMode, setSortMode] = useState("stale"); // stale | recent | oldest | ticket
   const [creatingTicket, setCreatingTicket] = useState(false);
   const [openTicket, setOpenTicket] = useState(null);
   const [remindGroup, setRemindGroup] = useState(null); // { customer, tickets }
@@ -67,28 +68,40 @@ export default function Tickets() {
       if (!map.has(t.customerId)) map.set(t.customerId, []);
       map.get(t.customerId).push(t);
     });
-    return Array.from(map.entries())
+    const groups = Array.from(map.entries())
       .map(([customerId, ticketsForCustomer]) => ({
         customer: customers.find((c) => c.id === customerId),
         tickets: ticketsForCustomer.sort((a, b) => new Date(b.date) - new Date(a.date)),
       }))
-      .filter((g) => g.customer)
-      .sort((a, b) => {
-        if (queryFilter === "open") {
-          const aOldest = Math.min(...a.tickets.map((t) => daysBetween(lastTouchedDate(t.id, t.date))));
-          const bOldest = Math.min(...b.tickets.map((t) => daysBetween(lastTouchedDate(t.id, t.date))));
-          return bOldest - aOldest;
-        }
-        return new Date(b.tickets[0].date) - new Date(a.tickets[0].date);
-      });
-  }, [filtered, customers, queryFilter]);
+      .filter((g) => g.customer);
+
+    const oldestStaleness = (g) => Math.min(...g.tickets.map((t) => daysBetween(lastTouchedDate(t.id, t.date))));
+
+    if (sortMode === "stale") {
+      groups.sort((a, b) => oldestStaleness(b) - oldestStaleness(a));
+    } else if (sortMode === "recent") {
+      groups.sort((a, b) => new Date(b.tickets[0].date) - new Date(a.tickets[0].date));
+    } else if (sortMode === "oldest") {
+      groups.sort((a, b) => new Date(a.tickets[a.tickets.length - 1].date) - new Date(b.tickets[b.tickets.length - 1].date));
+    } else if (sortMode === "ticket") {
+      groups.sort((a, b) => (a.tickets[0].ticketNumber || "").localeCompare(b.tickets[0].ticketNumber || ""));
+      groups.forEach((g) => g.tickets.sort((a, b) => (a.ticketNumber || "").localeCompare(b.ticketNumber || "")));
+    }
+    return groups;
+  }, [filtered, customers, sortMode]);
+
+  const summary = useMemo(() => ({
+    open: tickets.filter((t) => OPEN_STAGES.includes(t.stage)).length,
+    closed: tickets.filter((t) => !OPEN_STAGES.includes(t.stage)).length,
+    total: tickets.length,
+  }), [tickets]);
 
   return (
     <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="font-display font-extrabold text-2xl">Sample Management</h1>
-          <p className="text-muted text-sm mt-1">{tickets.length} tickets</p>
+          <p className="text-muted text-sm mt-1">{tickets.length} tickets across {new Set(tickets.map(t => t.customerId)).size} customers</p>
         </div>
         <button
           onClick={() => setCreatingTicket(true)}
@@ -96,6 +109,21 @@ export default function Tickets() {
         >
           + New Sample Ticket
         </button>
+      </div>
+
+      <div className="grid grid-cols-3 bg-panel border border-line rounded-2xl overflow-hidden">
+        <div className="text-center py-3 border-r border-line">
+          <div className="font-display font-bold text-xl text-thread">{summary.open}</div>
+          <div className="text-[11px] text-muted uppercase tracking-wide">Open</div>
+        </div>
+        <div className="text-center py-3 border-r border-line">
+          <div className="font-display font-bold text-xl text-loom">{summary.closed}</div>
+          <div className="text-[11px] text-muted uppercase tracking-wide">Closed</div>
+        </div>
+        <div className="text-center py-3">
+          <div className="font-display font-bold text-xl text-ink">{summary.total}</div>
+          <div className="text-[11px] text-muted uppercase tracking-wide">Total</div>
+        </div>
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
@@ -116,6 +144,17 @@ export default function Tickets() {
             </button>
           ))}
         </div>
+
+        <select
+          value={sortMode}
+          onChange={(e) => setSortMode(e.target.value)}
+          className="border border-line rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-ink2 w-fit"
+        >
+          <option value="stale">Sort: Needs attention first</option>
+          <option value="recent">Sort: Newest date first</option>
+          <option value="oldest">Sort: Oldest date first</option>
+          <option value="ticket">Sort: Ticket number</option>
+        </select>
 
         <select
           value={stageFilter}

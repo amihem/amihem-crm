@@ -26,7 +26,11 @@ export default function Dashboard() {
     const lost = tickets.filter((t) => LOST_STAGES.includes(t.stage));
     const pendingSamples = tickets.filter((t) => !t.received);
     const decided = won.length + lost.length;
-    const conversion = decided ? Math.round((won.length / decided) * 100) : 0;
+    // Conversion against ALL samples sent (not just decided ones) — this
+    // is what "how many of our samples actually became orders" means.
+    // Won/(Won+Lost) alone hits 100% the moment Lost=0, even with 40+
+    // samples still pending — misleading.
+    const conversion = tickets.length ? Math.round((won.length / tickets.length) * 100) : 0;
 
     const todaysFollowups = followups.filter((f) => isToday(f.nextFollowUpDate));
     const overdueFollowups = followups.filter((f) => isOverdue(f.nextFollowUpDate));
@@ -65,7 +69,7 @@ export default function Dashboard() {
         <KpiCard label="Today's Follow-ups" value={stats.todaysFollowups.length} tone="thread" icon={CalendarClock} />
         <KpiCard label="Overdue Follow-ups" value={stats.overdueFollowups.length} tone="rust" icon={AlarmClockOff} />
         <KpiCard label="Pending Samples" value={stats.pendingSamples.length} tone="ink" icon={PackageSearch} />
-        <KpiCard label="Conversion %" value={`${stats.conversion}%`} tone="loom" sub={`${stats.won.length} won · ${stats.lost.length} lost`} icon={TrendingUp} />
+        <KpiCard label="Conversion %" value={`${stats.conversion}%`} tone="loom" sub={`${stats.won.length} won of ${tickets.length} sent`} icon={TrendingUp} />
       </div>
 
       <div className="grid sm:grid-cols-2 gap-4">

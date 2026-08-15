@@ -59,8 +59,14 @@ export default function Analytics() {
     const lost = tickets.filter((t) => LOST_STAGES.includes(t.stage)).length;
     const pending = tickets.length - won - lost;
     const decided = won + lost;
-    const conversion = decided ? Math.round((won / decided) * 100) : 0;
-    return { won, lost, pending, conversion, total: tickets.length };
+    // Overall conversion — against every sample ever sent. This is the
+    // number that answers "how much of what we send actually sells."
+    const conversion = tickets.length ? Math.round((won / tickets.length) * 100) : 0;
+    // Win rate of samples that have actually been decided one way or the
+    // other (excludes ones still open) — useful once you want to know
+    // "of the ones we've heard back on, how many did we win."
+    const decidedRate = decided ? Math.round((won / decided) * 100) : 0;
+    return { won, lost, pending, conversion, decidedRate, decided, total: tickets.length };
   }, [tickets]);
 
   const byStage = useMemo(() => {
@@ -140,12 +146,21 @@ export default function Analytics() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-4">
         <KpiCard label="Total Samples" value={overall.total} />
         <KpiCard label="Won" value={overall.won} tone="loom" />
         <KpiCard label="Lost" value={overall.lost} tone="rust" />
-        <KpiCard label="Conversion %" value={`${overall.conversion}%`} tone="thread" />
+        <KpiCard label="Still Open" value={overall.pending} tone="thread" />
+        <KpiCard
+          label="Conversion %"
+          value={`${overall.conversion}%`}
+          tone="thread"
+          sub={`${overall.decidedRate}% of the ${overall.decided} decided so far`}
+        />
       </div>
+      <p className="text-xs text-muted -mt-2">
+        Conversion % = orders won ÷ all samples sent. It only rises as open queries actually convert or drop off — it won't hit 100% just because nothing's been marked lost yet.
+      </p>
 
       <div className="grid sm:grid-cols-2 gap-4">
         <ChartCard title="Tickets by Stage">
