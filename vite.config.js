@@ -12,6 +12,9 @@ export default defineConfig({
       manifest: false, // we ship our own manifest.webmanifest in /public
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        cleanupOutdatedCaches: true,
+        skipWaiting: true,
+        clientsClaim: true,
       },
     }),
   ],
