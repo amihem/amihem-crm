@@ -30,6 +30,9 @@ export default function Tickets() {
   const [stageFilter, setStageFilter] = useState("");
   const [queryFilter, setQueryFilter] = useState("open"); // open | closed | all
   const [sortMode, setSortMode] = useState("stale"); // stale | recent | oldest | ticket
+  const [searchQuery, setSearchQuery] = useState("");
+  const [customerFilter, setCustomerFilter] = useState("");
+  const [productFilter, setProductFilter] = useState("");
   const [creatingTicket, setCreatingTicket] = useState(false);
   const [openTicket, setOpenTicket] = useState(null);
   const [remindGroup, setRemindGroup] = useState(null); // { customer, tickets }
@@ -49,15 +52,27 @@ export default function Tickets() {
   };
 
   const filtered = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return tickets.filter((t) => {
       const matchesStage = !stageFilter || t.stage === stageFilter;
       const matchesQuery =
         queryFilter === "all" ||
         (queryFilter === "open" && OPEN_STAGES.includes(t.stage)) ||
         (queryFilter === "closed" && !OPEN_STAGES.includes(t.stage));
-      return matchesStage && matchesQuery;
+      const matchesCustomer = !customerFilter || t.customerId === customerFilter;
+      const matchesProduct = !productFilter || t.productId === productFilter;
+      const matchesSearch =
+        !q ||
+        [
+          t.ticketNumber,
+          t.shade,
+          customers.find((c) => c.id === t.customerId)?.name,
+          customers.find((c) => c.id === t.customerId)?.buyerName,
+          products.find((p) => p.id === t.productId)?.qualityName,
+        ].filter(Boolean).join(" ").toLowerCase().includes(q);
+      return matchesStage && matchesQuery && matchesCustomer && matchesProduct && matchesSearch;
     });
-  }, [tickets, stageFilter, queryFilter]);
+  }, [tickets, stageFilter, queryFilter, customerFilter, productFilter, searchQuery, customers, products]);
 
   // One row per CUSTOMER, with all their sample tickets nested inside —
   // a customer often gets several qualities sampled at once, so a flat
@@ -126,6 +141,16 @@ export default function Tickets() {
         </div>
       </div>
 
+      <div className="relative">
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
+        <input
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search ticket number, customer, buyer, product, shade…"
+          className="w-full border border-line rounded-lg pl-9 pr-3 py-2.5 text-sm bg-white outline-none focus:border-ink2"
+        />
+      </div>
+
       <div className="flex items-center gap-3 flex-wrap">
         <div className="flex bg-panel border border-line rounded-lg p-0.5 w-fit">
           {[
@@ -151,8 +176,8 @@ export default function Tickets() {
           className="border border-line rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-ink2 w-fit"
         >
           <option value="stale">Sort: Needs attention first</option>
-          <option value="recent">Sort: Newest date first</option>
-          <option value="oldest">Sort: Oldest date first</option>
+          <option value="recent">Sort: Date (newest first)</option>
+          <option value="oldest">Sort: Date (oldest first)</option>
           <option value="ticket">Sort: Ticket number</option>
         </select>
 
@@ -164,6 +189,41 @@ export default function Tickets() {
           <option value="">All stages</option>
           {TICKET_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
+
+        <select
+          value={customerFilter}
+          onChange={(e) => setCustomerFilter(e.target.value)}
+          className="border border-line rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-ink2 w-fit max-w-[160px]"
+        >
+          <option value="">All customers</option>
+          {customers
+            .filter((c) => tickets.some((t) => t.customerId === c.id))
+            .slice()
+            .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+            .map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+
+        <select
+          value={productFilter}
+          onChange={(e) => setProductFilter(e.target.value)}
+          className="border border-line rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-ink2 w-fit max-w-[160px]"
+        >
+          <option value="">All products</option>
+          {products
+            .filter((p) => tickets.some((t) => t.productId === p.id))
+            .slice()
+            .sort((a, b) => (a.qualityName || "").localeCompare(b.qualityName || ""))
+            .map((p) => <option key={p.id} value={p.id}>{p.qualityName}</option>)}
+        </select>
+
+        {(searchQuery || customerFilter || productFilter || stageFilter) && (
+          <button
+            onClick={() => { setSearchQuery(""); setCustomerFilter(""); setProductFilter(""); setStageFilter(""); }}
+            className="text-xs font-semibold text-rust hover:underline"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       <div className="flex flex-col gap-3">
