@@ -1,28 +1,67 @@
 // whatsapp.js — builds wa.me deep links with pre-filled templates.
 // No API/business account needed; this just opens WhatsApp with text ready.
+//
+// Message style matches the Enquiry-follow-up format already proven in
+// trdsls-app: bold business header, "Dear *Party Name*," opening, a bold
+// description line, date fields, and a "Kindly revert at the earliest"
+// closing with a Regards sign-off.
+
+import { getCompanyName } from "./companyProfile";
+
+function header() {
+  return `🏢 *${getCompanyName()}*`;
+}
+
+function signOff() {
+  return `Regards\n${getCompanyName()}`;
+}
+
+// DD/M/YYYY — matches the reference format, not the "31 Jul 2026" style
+// used elsewhere in the app's UI.
+function shortDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+}
+
+function partyName(c) {
+  return c.name || c.buyerName || "";
+}
 
 const TEMPLATES = {
-  sampleReminder: (c, t) =>
-    `Hi ${c.buyerName || c.name}, following up on the ${t.shade || ""} sample (${t.ticketNumber}) we sent — could you share an update on how it's looking?`,
-  sampleReminderMulti: (c, tickets) => {
-    const list = tickets.map((t) => `${t.ticketNumber} (${t.shade || t.stage})`).join(", ");
-    return `Hi ${c.buyerName || c.name}, following up on the samples we sent — ${list}. Could you share feedback so we can move things forward?`;
+  sampleReminder: (c, t) => {
+    const desc = [t.shade].filter(Boolean).join(" ") || t.ticketNumber;
+    return `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding:\n\n📋 *${t.ticketNumber}${t.shade ? ` — ${t.shade}` : ""}*\n\nSample Date: ${shortDate(t.date)}${t.dispatchDate ? `\nDispatch Date: ${shortDate(t.dispatchDate)}` : ""}\n\nKindly revert at the earliest.\n\n${signOff()}`;
   },
+
+  sampleReminderMulti: (c, tickets) => {
+    const lines = tickets.map((t, i) => `${i + 1}. *${t.ticketNumber}*${t.shade ? ` — ${t.shade}` : ""}`).join("\n");
+    return `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding the samples sent to you:\n\n${lines}\n\nKindly revert at the earliest.\n\n${signOff()}`;
+  },
+
   priceReminder: (c, t) =>
-    `Hi ${c.buyerName || c.name}, checking in on the pricing discussion for ${t.ticketNumber}. Let us know if you'd like to move ahead.`,
+    `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding:\n\n📋 *${t.ticketNumber}${t.shade ? ` — ${t.shade}` : ""}*\n\nWe had discussed pricing on this — kindly let us know if you'd like to move ahead.\n\nKindly revert at the earliest.\n\n${signOff()}`,
+
   orderReminder: (c, t) =>
-    `Hi ${c.buyerName || c.name}, just following up on ${t.ticketNumber} — is the order ready to be confirmed on our end?`,
+    `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding:\n\n📋 *${t.ticketNumber}${t.shade ? ` — ${t.shade}` : ""}*\n\nKindly confirm if the order can be finalised from your end.\n\nKindly revert at the earliest.\n\n${signOff()}`,
+
   meetingReminder: (c) =>
-    `Hi ${c.buyerName || c.name}, would you have some time this week for a quick meeting to go over new qualities?`,
+    `${header()}\n\nDear *${partyName(c)}*,\n\nWould you have some time this week for a quick meeting to go over our new qualities?\n\nKindly revert at the earliest.\n\n${signOff()}`,
+
   thankYou: (c) =>
-    `Hi ${c.buyerName || c.name}, thank you for your time today — always a pleasure. We'll follow up as discussed.`,
+    `${header()}\n\nDear *${partyName(c)}*,\n\nThank you for your time today — always a pleasure. We'll follow up as discussed.\n\n${signOff()}`,
+
   greeting: (c) =>
-    `Hi ${c.buyerName || c.name}, hope you're doing well! Just checking in from our side.`,
+    `${header()}\n\nDear *${partyName(c)}*,\n\nHope you're doing well! Just checking in from our side.\n\n${signOff()}`,
 };
 
+// Always normalizes to the LAST 10 digits + country code 91 — robust
+// against however the number was originally entered (with/without +91,
+// spaces, dashes, a leading 0, etc.).
 export function buildWhatsAppLink(phone, message) {
   const digits = String(phone || "").replace(/\D/g, "");
-  const withCountry = digits.length === 10 ? `91${digits}` : digits;
+  const withCountry = digits ? `91${digits.slice(-10)}` : "";
   return `https://wa.me/${withCountry}?text=${encodeURIComponent(message)}`;
 }
 
