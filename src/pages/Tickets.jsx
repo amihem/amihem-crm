@@ -295,7 +295,7 @@ export default function Tickets() {
                           <RefreshCw size={12} /> Follow-up
                         </ActionBtn>
                         {customer.whatsapp && (
-                          <ActionBtn tone="loom" as="a" href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage("sampleReminder", customer, t))} target="_blank" rel="noreferrer">
+                          <ActionBtn tone="loom" as="a" href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage("sampleReminder", customer, { ...t, productName: productName(t.productId) }))} target="_blank" rel="noreferrer">
                             <MessageCircle size={12} /> WA
                           </ActionBtn>
                         )}
@@ -529,7 +529,8 @@ function ReminderPicker({ group, productName, onClose }) {
 
   const send = () => {
     if (selectedTickets.length === 0) return;
-    const message = getMultiSampleReminderMessage(customer, selectedTickets);
+    const enriched = selectedTickets.map((t) => ({ ...t, productName: productName(t.productId) }));
+    const message = getMultiSampleReminderMessage(customer, enriched);
     window.open(buildWhatsAppLink(customer.whatsapp, message), "_blank");
     onClose();
   };
@@ -858,7 +859,7 @@ function TicketDetail({ ticket, customer, product, customers, products, onCreate
           {Object.entries(TEMPLATE_LABELS).map(([key, label]) => (
             <a
               key={key}
-              href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage(key, customer, ticket))}
+              href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage(key, customer, { ...ticket, productName: product?.qualityName }))}
               target="_blank" rel="noreferrer"
               className="text-xs font-semibold px-3 py-1.5 rounded-full bg-loom/10 text-loom border border-loom/30 hover:bg-loom/20"
             >

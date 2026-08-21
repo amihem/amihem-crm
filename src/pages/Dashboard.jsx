@@ -78,7 +78,7 @@ export default function Dashboard() {
             const c = customerByTicket(f.ticketId);
             const t = ticketById(f.ticketId);
             return (
-              <FollowUpRow key={f.id} f={f} c={c} t={t} overdueDays={daysBetween(f.nextFollowUpDate)} />
+              <FollowUpRow key={f.id} f={f} c={c} t={t ? { ...t, productName: productName(t.productId) } : t} overdueDays={daysBetween(f.nextFollowUpDate)} />
             );
           })}
         </Panel>
@@ -87,7 +87,7 @@ export default function Dashboard() {
           {stats.todaysFollowups.map((f) => {
             const c = customerByTicket(f.ticketId);
             const t = ticketById(f.ticketId);
-            return <FollowUpRow key={f.id} f={f} c={c} t={t} />;
+            return <FollowUpRow key={f.id} f={f} c={c} t={t ? { ...t, productName: productName(t.productId) } : t} />;
           })}
         </Panel>
       </div>
@@ -109,7 +109,7 @@ export default function Dashboard() {
                   )}
                   {c?.whatsapp && (
                     <a
-                      href={buildWhatsAppLink(c.whatsapp, getTemplateMessage("sampleReminder", c, t))}
+                      href={buildWhatsAppLink(c.whatsapp, getTemplateMessage("sampleReminder", c, { ...t, productName: productName(t.productId) }))}
                       target="_blank" rel="noreferrer"
                       className="w-7 h-7 flex items-center justify-center rounded-full bg-loom/10 text-loom text-xs"
                     >
