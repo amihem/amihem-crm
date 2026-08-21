@@ -29,22 +29,28 @@ function partyName(c) {
   return c.name || c.buyerName || "";
 }
 
+// Product name leads the description line (what the customer actually
+// recognizes) — ticket number is still included as a small reference tag,
+// not the headline, since a bare "AMH-2026-0003" means nothing to them.
+function productLine(t) {
+  const product = t.productName || "Sample";
+  return `${product}${t.shade ? ` — ${t.shade}` : ""}`;
+}
+
 const TEMPLATES = {
-  sampleReminder: (c, t) => {
-    const desc = [t.shade].filter(Boolean).join(" ") || t.ticketNumber;
-    return `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding:\n\n📋 *${t.ticketNumber}${t.shade ? ` — ${t.shade}` : ""}*\n\nSample Date: ${shortDate(t.date)}${t.dispatchDate ? `\nDispatch Date: ${shortDate(t.dispatchDate)}` : ""}\n\nKindly revert at the earliest.\n\n${signOff()}`;
-  },
+  sampleReminder: (c, t) =>
+    `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding:\n\n📋 *${productLine(t)}*\n(Ref: ${t.ticketNumber})\n\nSample Date: ${shortDate(t.date)}${t.dispatchDate ? `\nDispatch Date: ${shortDate(t.dispatchDate)}` : ""}\n\nKindly revert at the earliest.\n\n${signOff()}`,
 
   sampleReminderMulti: (c, tickets) => {
-    const lines = tickets.map((t, i) => `${i + 1}. *${t.ticketNumber}*${t.shade ? ` — ${t.shade}` : ""}`).join("\n");
+    const lines = tickets.map((t, i) => `${i + 1}. *${productLine(t)}* (Ref: ${t.ticketNumber})`).join("\n");
     return `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding the samples sent to you:\n\n${lines}\n\nKindly revert at the earliest.\n\n${signOff()}`;
   },
 
   priceReminder: (c, t) =>
-    `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding:\n\n📋 *${t.ticketNumber}${t.shade ? ` — ${t.shade}` : ""}*\n\nWe had discussed pricing on this — kindly let us know if you'd like to move ahead.\n\nKindly revert at the earliest.\n\n${signOff()}`,
+    `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding:\n\n📋 *${productLine(t)}*\n(Ref: ${t.ticketNumber})\n\nWe had discussed pricing on this — kindly let us know if you'd like to move ahead.\n\nKindly revert at the earliest.\n\n${signOff()}`,
 
   orderReminder: (c, t) =>
-    `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding:\n\n📋 *${t.ticketNumber}${t.shade ? ` — ${t.shade}` : ""}*\n\nKindly confirm if the order can be finalised from your end.\n\nKindly revert at the earliest.\n\n${signOff()}`,
+    `${header()}\n\nDear *${partyName(c)}*,\n\nThis is a follow-up regarding:\n\n📋 *${productLine(t)}*\n(Ref: ${t.ticketNumber})\n\nKindly confirm if the order can be finalised from your end.\n\nKindly revert at the earliest.\n\n${signOff()}`,
 
   meetingReminder: (c) =>
     `${header()}\n\nDear *${partyName(c)}*,\n\nWould you have some time this week for a quick meeting to go over our new qualities?\n\nKindly revert at the earliest.\n\n${signOff()}`,
