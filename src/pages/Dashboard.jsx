@@ -5,7 +5,7 @@ import { useCustomers, useProducts, useTickets, useFollowUps, useInventory } fro
 import KpiCard from "../components/KpiCard.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
 import { formatDate, isOverdue, isToday, daysBetween } from "../utils/helpers";
-import { buildWhatsAppLink, getTemplateMessage } from "../services/whatsapp";
+import { buildWhatsAppLink, getTemplateMessage, attachProductInfo } from "../services/whatsapp";
 import { WON_STAGES, LOST_STAGES, LOW_STOCK_THRESHOLD, OPEN_STAGES } from "../data/schema";
 
 export default function Dashboard() {
@@ -78,7 +78,7 @@ export default function Dashboard() {
             const c = customerByTicket(f.ticketId);
             const t = ticketById(f.ticketId);
             return (
-              <FollowUpRow key={f.id} f={f} c={c} t={t ? { ...t, productName: productName(t.productId) } : t} overdueDays={daysBetween(f.nextFollowUpDate)} />
+              <FollowUpRow key={f.id} f={f} c={c} t={t ? attachProductInfo(t, products.find((p) => p.id === t.productId)) : t} overdueDays={daysBetween(f.nextFollowUpDate)} />
             );
           })}
         </Panel>
@@ -87,7 +87,7 @@ export default function Dashboard() {
           {stats.todaysFollowups.map((f) => {
             const c = customerByTicket(f.ticketId);
             const t = ticketById(f.ticketId);
-            return <FollowUpRow key={f.id} f={f} c={c} t={t ? { ...t, productName: productName(t.productId) } : t} />;
+            return <FollowUpRow key={f.id} f={f} c={c} t={t ? attachProductInfo(t, products.find((p) => p.id === t.productId)) : t} />;
           })}
         </Panel>
       </div>
@@ -109,7 +109,7 @@ export default function Dashboard() {
                   )}
                   {c?.whatsapp && (
                     <a
-                      href={buildWhatsAppLink(c.whatsapp, getTemplateMessage("sampleReminder", c, { ...t, productName: productName(t.productId) }))}
+                      href={buildWhatsAppLink(c.whatsapp, getTemplateMessage("sampleReminder", c, attachProductInfo(t, products.find((p) => p.id === t.productId))))}
                       target="_blank" rel="noreferrer"
                       className="w-7 h-7 flex items-center justify-center rounded-full bg-loom/10 text-loom text-xs"
                     >

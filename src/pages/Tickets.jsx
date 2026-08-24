@@ -13,7 +13,7 @@ import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
 import { formatDate, isOverdue, nextTicketNumbers, daysBetween, newId } from "../utils/helpers";
 import { ticketProbability } from "../utils/scoring";
 import { compressImage } from "../utils/image";
-import { buildWhatsAppLink, getTemplateMessage, getMultiSampleReminderMessage, TEMPLATE_LABELS } from "../services/whatsapp";
+import { buildWhatsAppLink, getTemplateMessage, getMultiSampleReminderMessage, attachProductInfo, TEMPLATE_LABELS } from "../services/whatsapp";
 import {
   SAMPLE_TYPE, DISPATCH_MODE, TICKET_STAGES, OPEN_STAGES, WON_STAGES, LOST_STAGES,
   FOLLOWUP_MODE, FOLLOWUP_PRIORITY, FOLLOWUP_STATUS,
@@ -295,7 +295,7 @@ export default function Tickets() {
                           <RefreshCw size={12} /> Follow-up
                         </ActionBtn>
                         {customer.whatsapp && (
-                          <ActionBtn tone="loom" as="a" href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage("sampleReminder", customer, { ...t, productName: productName(t.productId) }))} target="_blank" rel="noreferrer">
+                          <ActionBtn tone="loom" as="a" href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage("sampleReminder", customer, attachProductInfo(t, products.find((p) => p.id === t.productId))))} target="_blank" rel="noreferrer">
                             <MessageCircle size={12} /> WA
                           </ActionBtn>
                         )}
@@ -417,6 +417,7 @@ export default function Tickets() {
           <ReminderPicker
             group={remindGroup}
             productName={productName}
+            products={products}
             onClose={() => setRemindGroup(null)}
           />
         )}
@@ -512,7 +513,7 @@ function QuickClosePanel({ ticket, onClose, onCancel }) {
   );
 }
 
-function ReminderPicker({ group, productName, onClose }) {
+function ReminderPicker({ group, productName, products, onClose }) {
   const { customer, tickets } = group;
   const PENDING_STAGES = ["Sample Sent", "Received", "Testing", "Need Revised Sample"];
   const [selected, setSelected] = useState(
@@ -529,7 +530,7 @@ function ReminderPicker({ group, productName, onClose }) {
 
   const send = () => {
     if (selectedTickets.length === 0) return;
-    const enriched = selectedTickets.map((t) => ({ ...t, productName: productName(t.productId) }));
+    const enriched = selectedTickets.map((t) => attachProductInfo(t, products.find((p) => p.id === t.productId)));
     const message = getMultiSampleReminderMessage(customer, enriched);
     window.open(buildWhatsAppLink(customer.whatsapp, message), "_blank");
     onClose();
@@ -859,7 +860,7 @@ function TicketDetail({ ticket, customer, product, customers, products, onCreate
           {Object.entries(TEMPLATE_LABELS).map(([key, label]) => (
             <a
               key={key}
-              href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage(key, customer, { ...ticket, productName: product?.qualityName }))}
+              href={buildWhatsAppLink(customer.whatsapp, getTemplateMessage(key, customer, attachProductInfo(ticket, product)))}
               target="_blank" rel="noreferrer"
               className="text-xs font-semibold px-3 py-1.5 rounded-full bg-loom/10 text-loom border border-loom/30 hover:bg-loom/20"
             >
