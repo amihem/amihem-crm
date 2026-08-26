@@ -5,12 +5,13 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 import Modal from "../components/Modal.jsx";
+import { CardSkeleton } from "../components/Skeleton.jsx";
 import EntitySearchField from "../components/EntitySearchField.jsx";
 import CustomerForm, { BLANK_CUSTOMER } from "../components/CustomerForm.jsx";
 import ProductForm, { BLANK_PRODUCT } from "../components/ProductForm.jsx";
 import { Field, TextInput, Select, TextArea } from "../components/FormField.jsx";
 import { StageBadge, PriorityBadge } from "../components/StatusBadge.jsx";
-import { formatDate, isOverdue, nextTicketNumbers, daysBetween, newId } from "../utils/helpers";
+import { formatDate, isOverdue, nextTicketNumbers, daysBetween, newId, formatCurrency } from "../utils/helpers";
 import { ticketProbability } from "../utils/scoring";
 import { compressImage } from "../utils/image";
 import { buildWhatsAppLink, getTemplateMessage, getMultiSampleReminderMessage, attachProductInfo, TEMPLATE_LABELS } from "../services/whatsapp";
@@ -22,7 +23,7 @@ import {
 export default function Tickets() {
   const { items: customers, save: saveCustomer } = useCustomers();
   const { items: products, save: saveProduct } = useProducts();
-  const { items: tickets, save: saveTicket, remove: removeTicket } = useTickets();
+  const { items: tickets, save: saveTicket, remove: removeTicket, loading } = useTickets();
   const { items: followups, save: saveFollowUp } = useFollowUps();
   const { permissions } = useAuth();
   const confirmDialog = useConfirm();
@@ -226,6 +227,9 @@ export default function Tickets() {
         )}
       </div>
 
+      {loading ? (
+        <CardSkeleton count={4} />
+      ) : (
       <div className="flex flex-col gap-3">
         {groupedByCustomer.map(({ customer, tickets: customerTickets }) => {
           const pendingCount = customerTickets.filter((t) => ["Sample Sent", "Received", "Testing", "Need Revised Sample"].includes(t.stage)).length;
@@ -336,6 +340,7 @@ export default function Tickets() {
           <div className="text-center py-12 text-muted text-sm">No tickets in this view.</div>
         )}
       </div>
+      )}
 
       <Modal open={!!quickFollowUpFor} onClose={() => setQuickFollowUpFor(null)} title={`Follow-up — ${quickFollowUpFor?.ticketNumber || ""}`}>
         {quickFollowUpFor && (
@@ -814,7 +819,7 @@ function TicketDetail({ ticket, customer, product, customers, products, onCreate
         <div className="text-xs text-muted bg-paper border border-line rounded-lg px-3 py-2 flex flex-wrap gap-x-4 gap-y-1">
           {ticket.courierName && <span>Courier: {ticket.courierName}</span>}
           {ticket.trackingNumber && <span>Tracking: {ticket.trackingNumber}</span>}
-          {ticket.courierCharges && <span>Charges: ₹{ticket.courierCharges}</span>}
+          {ticket.courierCharges && <span>Charges: ₹{formatCurrency(ticket.courierCharges)}</span>}
           <span>POD: {ticket.podReceived ? "Received" : "Pending"}</span>
         </div>
       )}

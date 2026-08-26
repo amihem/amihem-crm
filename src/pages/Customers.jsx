@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 import { CustomerStatusBadge, TemperatureBadge } from "../components/StatusBadge.jsx";
+import { GridSkeleton } from "../components/Skeleton.jsx";
 import Modal from "../components/Modal.jsx";
 import MasterTabs from "../components/MasterTabs.jsx";
 import SearchDropdown from "../components/SearchDropdown.jsx";
@@ -13,7 +14,7 @@ import { CUSTOMER_STATUS } from "../data/schema";
 import { scoreCustomer, scoreTemperature } from "../utils/scoring";
 
 export default function Customers() {
-  const { items: customers, save, remove } = useCustomers();
+  const { items: customers, save, remove, loading } = useCustomers();
   const confirmDialog = useConfirm();
   const showToast = useToast();
   const { items: tickets } = useTickets();
@@ -150,6 +151,9 @@ export default function Customers() {
         </select>
       </div>
 
+      {loading ? (
+        <GridSkeleton count={6} />
+      ) : (
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {filtered.map((c) => {
           const temp = scoreTemperature(scoreCustomer(c, tickets, followups));
@@ -215,6 +219,7 @@ export default function Customers() {
           <div className="col-span-full text-center py-12 text-muted text-sm">No customers match your search.</div>
         )}
       </div>
+      )}
 
       <Modal open={!!editing} onClose={() => setEditing(null)} title={editing?.id ? "Edit Customer" : "Add Customer"} wide>
         {editing && <CustomerForm initial={editing} onSave={handleSave} onCancel={() => setEditing(null)} />}

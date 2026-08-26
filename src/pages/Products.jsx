@@ -3,6 +3,7 @@ import { useProducts } from "../context/domains.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
+import { formatCurrency } from "../utils/helpers";
 import Modal from "../components/Modal.jsx";
 import MasterTabs from "../components/MasterTabs.jsx";
 import SearchDropdown from "../components/SearchDropdown.jsx";
@@ -125,7 +126,7 @@ export default function Products() {
                 <td className="px-4 py-3 text-muted">{p.category}</td>
                 <td className="px-4 py-3 text-muted">{p.gsm} gsm · {p.width}"</td>
                 <td className="px-4 py-3 text-muted">{p.millName}</td>
-                <td className="px-4 py-3 text-muted">₹{p.price}</td>
+                <td className="px-4 py-3 text-muted">₹{formatCurrency(p.price)}</td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
                   <button onClick={() => setEditing(p)} className="text-xs font-semibold text-ink2 hover:underline mr-3">Edit</button>
                   {permissions?.canDelete && (
