@@ -1,4 +1,4 @@
-import { RefreshCw, MessageCircle, Phone, CheckCircle2, Pencil, Trash2, Search, Plus } from "lucide-react";
+import { RefreshCw, MessageCircle, Phone, CheckCircle2, Pencil, Trash2, Search, Plus, Send } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useCustomers, useProducts, useTickets, useFollowUps, useAttachments } from "../context/domains.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
@@ -40,6 +40,7 @@ export default function Tickets() {
   const [quickFollowUpFor, setQuickFollowUpFor] = useState(null); // ticket
   const [editingTicket, setEditingTicket] = useState(null); // ticket
   const [closingTicket, setClosingTicket] = useState(null); // ticket
+  const [bulkQueueOpen, setBulkQueueOpen] = useState(false);
 
   const productName = (id) => products.find((p) => p.id === id)?.qualityName || "—";
 
@@ -119,12 +120,20 @@ export default function Tickets() {
           <h1 className="font-display font-extrabold text-2xl">Sample Management</h1>
           <p className="text-muted text-sm mt-1">{tickets.length} tickets across {new Set(tickets.map(t => t.customerId)).size} customers</p>
         </div>
-        <button
-          onClick={() => setCreatingTicket(true)}
-          className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-ink2 transition"
-        >
-          + New Sample Ticket
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setBulkQueueOpen(true)}
+            className="flex items-center gap-1.5 bg-loom/10 text-loom border border-loom/30 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-loom/20 transition"
+          >
+            <Send size={14} /> Bulk Reminders
+          </button>
+          <button
+            onClick={() => setCreatingTicket(true)}
+            className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-ink2 transition"
+          >
+            + New Sample Ticket
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 bg-panel border border-line rounded-2xl overflow-hidden">
@@ -427,6 +436,16 @@ export default function Tickets() {
           />
         )}
       </Modal>
+
+      <Modal open={bulkQueueOpen} onClose={() => setBulkQueueOpen(false)} title="Bulk WhatsApp Reminders" wide>
+        {bulkQueueOpen && (
+          <BulkReminderQueue
+            groups={groupedByCustomer.filter((g) => g.customer.whatsapp && g.tickets.some((t) => OPEN_STAGES.includes(t.stage)))}
+            products={products}
+            onClose={() => setBulkQueueOpen(false)}
+          />
+        )}
+      </Modal>
     </div>
   );
 }
@@ -564,6 +583,112 @@ function ReminderPicker({ group, productName, products, onClose }) {
         >
           Send via WhatsApp ({selectedTickets.length})
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Bulk WhatsApp Reminders — walk through every customer with an
+// open query one by one. Phones don't allow apps to auto-send WhatsApp to
+// multiple people at once, so this opens WhatsApp per customer with a tap
+// to advance — the same guided-queue pattern already proven in trdsls-app's
+// Outstanding tab, adapted here for open sample queries. ----------
+function BulkReminderQueue({ groups, products, onClose }) {
+  const withPhone = groups; // already pre-filtered to customers with whatsapp
+  const [selected, setSelected] = useState(() => new Set(withPhone.map((g) => g.customer.id)));
+  const [queue, setQueue] = useState(null);
+  const [idx, setIdx] = useState(0);
+  const [sentCount, setSentCount] = useState(0);
+
+  const toggle = (id) => {
+    const next = new Set(selected);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSelected(next);
+  };
+  const selectAll = () => setSelected(new Set(withPhone.map((g) => g.customer.id)));
+  const deselectAll = () => setSelected(new Set());
+
+  const startQueue = () => {
+    const list = withPhone.filter((g) => selected.has(g.customer.id));
+    if (list.length === 0) return;
+    setQueue(list);
+    setIdx(0);
+    setSentCount(0);
+  };
+
+  const current = queue ? queue[idx] : null;
+  const currentOpenTickets = current ? current.tickets.filter((t) => OPEN_STAGES.includes(t.stage)) : [];
+
+  const openWA = () => {
+    const enriched = currentOpenTickets.map((t) => attachProductInfo(t, products.find((p) => p.id === t.productId)));
+    const message = getMultiSampleReminderMessage(current.customer, enriched);
+    window.open(buildWhatsAppLink(current.customer.whatsapp, message), "_blank");
+  };
+  const markSentAndNext = () => { setSentCount((c) => c + 1); setIdx((i) => i + 1); };
+  const skip = () => setIdx((i) => i + 1);
+  const isDone = queue && idx >= queue.length;
+
+  if (!queue) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-xs text-muted bg-thread/10 border border-thread/30 rounded-lg px-3 py-2">
+          Phones don't let apps auto-send WhatsApp to multiple people at once — this opens WhatsApp for each selected customer, one by one. Tap "Sent — Next" after each to move on.
+        </p>
+        <div className="flex gap-2">
+          <button onClick={selectAll} className="flex-1 bg-panel border border-line rounded-lg py-2 text-xs font-semibold hover:bg-paper">Select All</button>
+          <button onClick={deselectAll} className="flex-1 bg-panel border border-line rounded-lg py-2 text-xs font-semibold hover:bg-paper">Deselect All</button>
+        </div>
+        <div className="max-h-72 overflow-y-auto flex flex-col gap-2">
+          {withPhone.map((g) => {
+            const openCount = g.tickets.filter((t) => OPEN_STAGES.includes(t.stage)).length;
+            return (
+              <label key={g.customer.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-paper cursor-pointer">
+                <input type="checkbox" checked={selected.has(g.customer.id)} onChange={() => toggle(g.customer.id)} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-ink truncate">{g.customer.name}</div>
+                  <div className="text-xs text-muted">{g.customer.whatsapp} · {openCount} open sample{openCount > 1 ? "s" : ""}</div>
+                </div>
+              </label>
+            );
+          })}
+          {withPhone.length === 0 && <p className="text-sm text-muted text-center py-6">No customers with open queries and a saved WhatsApp number.</p>}
+        </div>
+        <button
+          onClick={startQueue}
+          disabled={selected.size === 0}
+          className="bg-loom text-white rounded-lg py-3 text-sm font-bold hover:opacity-90 disabled:opacity-40"
+        >
+          Start Sending ({selected.size})
+        </button>
+      </div>
+    );
+  }
+
+  if (isDone) {
+    return (
+      <div className="text-center py-6 flex flex-col items-center gap-2">
+        <CheckCircle2 className="text-loom" size={36} />
+        <div className="font-display font-bold text-lg">Done!</div>
+        <p className="text-sm text-muted">Sent to {sentCount} of {queue.length} customers.</p>
+        <button onClick={onClose} className="mt-2 bg-ink text-white rounded-lg px-5 py-2.5 text-sm font-semibold hover:bg-ink2">Close</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-center text-xs text-muted font-semibold">Sending {idx + 1} of {queue.length}</p>
+      <div className="bg-paper rounded-xl p-4 text-center">
+        <div className="font-display font-bold text-base">{current.customer.name}</div>
+        <div className="text-xs text-muted mt-0.5">{current.customer.whatsapp}</div>
+        <div className="text-xs text-thread font-semibold mt-2">{currentOpenTickets.length} open sample{currentOpenTickets.length > 1 ? "s" : ""}</div>
+      </div>
+      <button onClick={openWA} className="bg-loom text-white rounded-lg py-3 text-sm font-bold hover:opacity-90 flex items-center justify-center gap-2">
+        <MessageCircle size={16} /> Open WhatsApp
+      </button>
+      <div className="flex gap-2">
+        <button onClick={skip} className="flex-1 bg-panel border border-line rounded-lg py-2.5 text-sm font-semibold hover:bg-paper">Skip</button>
+        <button onClick={markSentAndNext} className="flex-[2] bg-ink text-white rounded-lg py-2.5 text-sm font-bold hover:bg-ink2">✓ Sent — Next</button>
       </div>
     </div>
   );
