@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Field, TextInput, Select, TextArea } from "./FormField.jsx";
 import { CUSTOMER_STATUS, CUSTOMER_CATEGORY } from "../data/schema";
+import { findDuplicateCustomer } from "../utils/duplicateCheck";
+import { useConfirm } from "../context/ConfirmContext.jsx";
 
 export const BLANK_CUSTOMER = {
   name: "", company: "", city: "", state: "", country: "India",
@@ -12,12 +14,33 @@ export const BLANK_CUSTOMER = {
 // Sample Ticket form's "+ New Customer" shortcut, so nothing is hidden
 // either way. On save, the caller decides what happens next (the ticket
 // form auto-selects the new customer and keeps you on the ticket).
-export default function CustomerForm({ initial, onSave, onCancel }) {
+//
+// `existingCustomers` is optional — pass the full customer list to get a
+// near-duplicate warning (same name, different spacing/casing) before
+// save, matching the safeguard trdsls-app already has for its Customer
+// Master. Omit it and the form just skips the check.
+export default function CustomerForm({ initial, onSave, onCancel, existingCustomers }) {
   const [form, setForm] = useState(initial || BLANK_CUSTOMER);
+  const confirmDialog = useConfirm();
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (existingCustomers) {
+      const dup = findDuplicateCustomer(form.name, existingCustomers, form.id);
+      if (dup) {
+        const ok = await confirmDialog(
+          `A customer named "${dup.name}" already exists. Saving "${form.name}" again will create a separate record with its own history, instead of adding to theirs. Save anyway?`,
+          { danger: true }
+        );
+        if (!ok) return;
+      }
+    }
+    onSave(form);
+  };
+
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(form); }} className="grid sm:grid-cols-2 gap-3">
+    <form onSubmit={handleSubmit} className="grid sm:grid-cols-2 gap-3">
       <Field label="Customer Name *"><TextInput required value={form.name} onChange={set("name")} /></Field>
       <Field label="Company"><TextInput value={form.company} onChange={set("company")} /></Field>
       <Field label="City"><TextInput value={form.city} onChange={set("city")} /></Field>

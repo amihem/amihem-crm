@@ -732,7 +732,18 @@ function NewTicketForm({ customers, products, existingTickets, onCreateCustomer,
     e.preventDefault();
     const validRows = rows.filter((r) => r.productId);
     if (!customerId || validRows.length === 0) return;
-    const ticketNumbers = nextTicketNumbers(existingTickets, validRows.length);
+    let ticketNumbers = nextTicketNumbers(existingTickets, validRows.length);
+    // Defensive re-check: on Supabase with multiple devices, another
+    // device could have taken one of these numbers between page load and
+    // this submit. Bump past any collision rather than silently create
+    // two tickets sharing a number.
+    const existingNumbers = new Set(existingTickets.map((t) => t.ticketNumber));
+    if (ticketNumbers.some((n) => existingNumbers.has(n))) {
+      ticketNumbers = nextTicketNumbers(
+        [...existingTickets, ...ticketNumbers.filter((n) => existingNumbers.has(n)).map((n) => ({ ticketNumber: n }))],
+        validRows.length
+      );
+    }
     const tickets = validRows.map((r, i) => ({
       ticketNumber: ticketNumbers[i],
       date: shared.date,
@@ -846,7 +857,7 @@ function NewTicketForm({ customers, products, existingTickets, onCreateCustomer,
       </div>
 
       <Modal open={quickAdd === "customer"} onClose={() => setQuickAdd(null)} title="Add New Customer" wide>
-        <CustomerForm initial={BLANK_CUSTOMER} onSave={handleCreateCustomer} onCancel={() => setQuickAdd(null)} />
+        <CustomerForm initial={BLANK_CUSTOMER} onSave={handleCreateCustomer} onCancel={() => setQuickAdd(null)} existingCustomers={customers} />
       </Modal>
       <Modal open={!!quickAdd?.row} onClose={() => setQuickAdd(null)} title="Add New Product" wide>
         <ProductForm initial={BLANK_PRODUCT} onSave={handleCreateProduct} onCancel={() => setQuickAdd(null)} />
@@ -1142,7 +1153,7 @@ function TicketEditForm({ ticket, customers, products, onCreateCustomer, onCreat
       </div>
 
       <Modal open={quickAdd === "customer"} onClose={() => setQuickAdd(null)} title="Add New Customer" wide>
-        <CustomerForm initial={BLANK_CUSTOMER} onSave={handleCreateCustomer} onCancel={() => setQuickAdd(null)} />
+        <CustomerForm initial={BLANK_CUSTOMER} onSave={handleCreateCustomer} onCancel={() => setQuickAdd(null)} existingCustomers={customers} />
       </Modal>
       <Modal open={quickAdd === "product"} onClose={() => setQuickAdd(null)} title="Add New Product" wide>
         <ProductForm initial={BLANK_PRODUCT} onSave={handleCreateProduct} onCancel={() => setQuickAdd(null)} />

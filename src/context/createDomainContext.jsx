@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useReducer } from "react";
 import * as dataService from "../services/dataService";
 import { newId } from "../utils/helpers";
+import { useToast } from "./ToastContext.jsx";
 
 // Factory that builds a Context + Provider + hook for one entity/store.
 // Each domain (customers, products, tickets, followups) gets its own
@@ -29,22 +30,41 @@ export function createDomainContext(storeName) {
 
   function Provider({ children }) {
     const [state, dispatch] = useReducer(reducer, { items: [], loading: true });
+    const showToast = useToast();
 
     useEffect(() => {
-      dataService.getAll(storeName).then((items) => dispatch({ type: "LOADED", items }));
+      dataService.getAll(storeName)
+        .then((items) => dispatch({ type: "LOADED", items }))
+        .catch((err) => {
+          dispatch({ type: "LOADED", items: [] });
+          showToast(`Couldn't load ${storeName}: ${err.message || "check your connection"}`, "error");
+        });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const save = useCallback(async (record) => {
       const withId = record.id ? record : { ...record, id: newId() };
-      const saved = await dataService.put(storeName, withId);
-      dispatch({ type: "UPSERT", item: saved });
-      return saved;
-    }, []);
+      try {
+        const saved = await dataService.put(storeName, withId);
+        dispatch({ type: "UPSERT", item: saved });
+        return saved;
+      } catch (err) {
+        showToast(`Couldn't save — ${err.message || "check your connection and try again"}`, "error");
+        throw err;
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [showToast]);
 
     const remove = useCallback(async (id) => {
-      await dataService.remove(storeName, id);
-      dispatch({ type: "REMOVE", id });
-    }, []);
+      try {
+        await dataService.remove(storeName, id);
+        dispatch({ type: "REMOVE", id });
+      } catch (err) {
+        showToast(`Couldn't delete — ${err.message || "check your connection and try again"}`, "error");
+        throw err;
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [showToast]);
 
     const value = { items: state.items, loading: state.loading, save, remove };
     return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

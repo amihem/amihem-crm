@@ -222,7 +222,7 @@ export default function Customers() {
       )}
 
       <Modal open={!!editing} onClose={() => setEditing(null)} title={editing?.id ? "Edit Customer" : "Add Customer"} wide>
-        {editing && <CustomerForm initial={editing} onSave={handleSave} onCancel={() => setEditing(null)} />}
+        {editing && <CustomerForm initial={editing} onSave={handleSave} onCancel={() => setEditing(null)} existingCustomers={customers} />}
       </Modal>
     </div>
   );

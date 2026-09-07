@@ -1,7 +1,9 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, FileText, LineChart, Package, FileBarChart, Settings as SettingsIcon, LogOut } from "lucide-react";
+import { LayoutDashboard, Users, FileText, LineChart, Package, FileBarChart, Settings as SettingsIcon, LogOut, Sun, Moon } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useTheme } from "../context/ThemeContext.jsx";
 import OverdueReminderPopup from "./OverdueReminderPopup.jsx";
+import NetworkStatus from "./NetworkStatus.jsx";
 
 // "Masters" consolidates Customers + Products into one nav slot — see
 // MasterTabs.jsx for the sub-tab switcher rendered inside those pages.
@@ -19,10 +21,13 @@ const MOBILE_NAV = [NAV[0], NAV[1], NAV[2], NAV[3], NAV[5]];
 
 export default function AppShell() {
   const { session, permissions, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const { pathname } = useLocation();
 
   return (
-    <div className="min-h-screen flex flex-col sm:flex-row">
+    <div className="min-h-screen flex flex-col">
+      <NetworkStatus />
+      <div className="flex flex-col sm:flex-row flex-1">
       <OverdueReminderPopup />
       {/* Desktop sidebar */}
       <aside className="hidden sm:flex flex-col w-60 shrink-0 bg-ink text-white min-h-screen p-5 gap-1">
@@ -68,9 +73,14 @@ export default function AppShell() {
         {session && (
           <div className={`text-xs text-white/40 pt-3 border-t border-white/10 flex items-center justify-between ${permissions?.canAccessSettings ? "" : "mt-auto"}`}>
             <span className="truncate">{session.name} · {session.role}</span>
-            <button onClick={logout} className="text-white/60 hover:text-white shrink-0 ml-2" aria-label="Logout">
-              <LogOut size={15} />
-            </button>
+            <div className="flex items-center gap-2 shrink-0 ml-2">
+              <button onClick={toggleTheme} className="text-white/60 hover:text-white" aria-label="Toggle dark mode">
+                {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+              </button>
+              <button onClick={logout} className="text-white/60 hover:text-white" aria-label="Logout">
+                <LogOut size={15} />
+              </button>
+            </div>
           </div>
         )}
       </aside>
@@ -84,6 +94,9 @@ export default function AppShell() {
           <span className="font-display font-extrabold text-base">Amihem CRM</span>
         </div>
         <div className="flex items-center gap-4">
+          <button onClick={toggleTheme} className="text-white/70" aria-label="Toggle dark mode">
+            {theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}
+          </button>
           {permissions?.canAccessSettings && (
             <NavLink to="/settings" className="text-white/70" aria-label="Settings">
               <SettingsIcon size={19} />
@@ -121,6 +134,7 @@ export default function AppShell() {
           );
         })}
       </nav>
+      </div>
     </div>
   );
 }

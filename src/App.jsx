@@ -10,6 +10,7 @@ import { AppProviders } from "./context/domains.jsx";
 import { AuthProvider, useAuth } from "./context/AuthContext.jsx";
 import { ToastProvider } from "./context/ToastContext.jsx";
 import { ConfirmProvider } from "./context/ConfirmContext.jsx";
+import { ThemeProvider } from "./context/ThemeContext.jsx";
 import * as dataService from "./services/dataService";
 import { buildSeed } from "./data/seed";
 
@@ -34,9 +35,9 @@ function AuthedApp() {
   if (!session) return <Login />;
 
   return (
-    <AppProviders>
-      <ToastProvider>
-        <ConfirmProvider>
+    <ToastProvider>
+      <ConfirmProvider>
+        <AppProviders>
           <HashRouter>
             <Suspense fallback={<PageLoader />}>
               <Routes>
@@ -54,9 +55,9 @@ function AuthedApp() {
               </Routes>
             </Suspense>
           </HashRouter>
-        </ConfirmProvider>
-      </ToastProvider>
-    </AppProviders>
+        </AppProviders>
+      </ConfirmProvider>
+    </ToastProvider>
   );
 }
 
@@ -96,9 +97,11 @@ function App() {
   }
 
   return (
-    <AuthProvider>
-      <AuthedApp />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AuthedApp />
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
 
