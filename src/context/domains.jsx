@@ -8,6 +8,7 @@ export const FollowUpsDomain = createDomainContext(STORES.followups);
 export const CallsDomain = createDomainContext(STORES.calls);
 export const InventoryDomain = createDomainContext(STORES.inventory);
 export const AttachmentsDomain = createDomainContext(STORES.attachments);
+export const PriceListDomain = createDomainContext(STORES.priceList);
 
 export const useCustomers = CustomersDomain.useDomain;
 export const useProducts = ProductsDomain.useDomain;
@@ -16,6 +17,7 @@ export const useFollowUps = FollowUpsDomain.useDomain;
 export const useCalls = CallsDomain.useDomain;
 export const useInventory = InventoryDomain.useDomain;
 export const useAttachments = AttachmentsDomain.useDomain;
+export const usePriceList = PriceListDomain.useDomain;
 
 export function AppProviders({ children }) {
   return (
@@ -25,7 +27,9 @@ export function AppProviders({ children }) {
           <FollowUpsDomain.Provider>
             <CallsDomain.Provider>
               <InventoryDomain.Provider>
-                <AttachmentsDomain.Provider>{children}</AttachmentsDomain.Provider>
+                <AttachmentsDomain.Provider>
+                  <PriceListDomain.Provider>{children}</PriceListDomain.Provider>
+                </AttachmentsDomain.Provider>
               </InventoryDomain.Provider>
             </CallsDomain.Provider>
           </FollowUpsDomain.Provider>
