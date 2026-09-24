@@ -5,10 +5,10 @@ export const newId = () => uuidv4();
 // ₹1,23,456 style (Indian digit grouping), not ₹123,456 — matches how
 // the business actually reads amounts. Blank/invalid input renders as
 // "0", never NaN or empty.
-export function formatCurrency(value) {
+export function formatCurrency(value, decimals = 0) {
   const n = Number(value);
   if (isNaN(n)) return "0";
-  return n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return n.toLocaleString("en-IN", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
 export function formatDate(iso) {
