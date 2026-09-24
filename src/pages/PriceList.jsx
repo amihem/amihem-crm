@@ -81,15 +81,27 @@ export default function PriceList() {
     try {
       const rows = await parseSpreadsheet(file);
       const mapped = mapPriceListRows(rows);
-      let imported = 0;
+      let created = 0;
+      let updated = 0;
       for (const record of mapped) {
-        const isDup = items.some((i) => i.rpNumber && record.rpNumber && i.rpNumber.trim().toLowerCase() === record.rpNumber.trim().toLowerCase());
-        if (isDup) continue;
-        await save(record);
-        imported += 1;
+        const existing = items.find((i) => i.rpNumber && record.rpNumber && i.rpNumber.trim().toLowerCase() === record.rpNumber.trim().toLowerCase());
+        if (existing) {
+          // Merge in only the non-empty fields from this row, so blank
+          // cells in the sheet don't wipe out data already on file —
+          // this is what lets a re-import patch in GLM/GSM/OZ (or any
+          // other field) for rows that already exist.
+          const merged = { ...existing };
+          for (const key of Object.keys(record)) {
+            if (record[key]) merged[key] = record[key];
+          }
+          await save(merged);
+          updated += 1;
+        } else {
+          await save(record);
+          created += 1;
+        }
       }
-      const skipped = mapped.length - imported;
-      showToast(`Imported ${imported} item(s) from ${rows.length} rows${skipped > 0 ? ` (${skipped} skipped as duplicates)` : ""}.`, "success");
+      showToast(`Imported ${created} new item(s), updated ${updated} existing from ${rows.length} rows.`, "success");
     } catch (err) {
       showToast(err.message || "Could not read that file.", "error");
     } finally {
