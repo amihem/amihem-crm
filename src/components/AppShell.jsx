@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, FileText, LineChart, Package, FileBarChart, Settings as SettingsIcon, LogOut, Sun, Moon } from "lucide-react";
+import { LayoutDashboard, Users, FileText, LineChart, Package, FileBarChart, Tags, Settings as SettingsIcon, LogOut, Sun, Moon } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useTheme } from "../context/ThemeContext.jsx";
 import OverdueReminderPopup from "./OverdueReminderPopup.jsx";
@@ -13,11 +13,13 @@ const NAV = [
   { to: "/tickets", label: "Samples", icon: FileText },
   { to: "/analytics", label: "Analytics", icon: LineChart },
   { to: "/inventory", label: "Inventory", icon: Package },
+  { to: "/price-list", label: "Price List", icon: Tags },
   { to: "/reports", label: "Reports", icon: FileBarChart },
 ];
 
-// Mobile bottom nav — 5 slots, covers the daily flow
-const MOBILE_NAV = [NAV[0], NAV[1], NAV[2], NAV[3], NAV[5]];
+// Mobile bottom nav — 5 slots, covers the daily flow. Inventory and
+// Price List stay desktop-sidebar-only, same as before.
+const MOBILE_NAV = [NAV[0], NAV[1], NAV[2], NAV[3], NAV[6]];
 
 export default function AppShell() {
   const { session, permissions, logout } = useAuth();

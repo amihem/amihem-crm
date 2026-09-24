@@ -9,31 +9,35 @@ const UNITS = [
 ];
 
 // Props: width (string, inches), gsm (string, the canonical stored value),
-// onChangeWidth(val), onChangeGsm(val) — the parent form only stores GSM;
-// this widget is just a convenience way to arrive at that number from
-// whichever unit the person actually has in hand.
-export default function FabricWeightFields({ width, gsm, onChangeWidth, onChangeGsm }) {
+// onChangeWidth(val), onChangeGsm(val) — most callers (Product Master)
+// only store GSM as canonical and this is just a convenience way to get
+// there. onChangeAll(result) is optional — pass it when you need all
+// three values persisted separately (e.g. Price List, which keeps
+// GLM/GSM/OZ as distinct columns straight from a mill's rate sheet).
+export default function FabricWeightFields({ width, gsm, onChangeWidth, onChangeGsm, onChangeAll }) {
   const [inputUnit, setInputUnit] = useState("gsm");
   const [inputValue, setInputValue] = useState(gsm || "");
 
   const computed = computeFabricWeights(inputValue, inputUnit, width);
 
+  const applyResult = (result) => {
+    if (result.gsm !== null) onChangeGsm?.(String(result.gsm));
+    if (result.gsm !== null) onChangeAll?.(result);
+  };
+
   const handleValueChange = (val) => {
     setInputValue(val);
-    const result = computeFabricWeights(val, inputUnit, width);
-    if (result.gsm !== null) onChangeGsm(String(result.gsm));
+    applyResult(computeFabricWeights(val, inputUnit, width));
   };
 
   const handleUnitChange = (unit) => {
     setInputUnit(unit);
-    const result = computeFabricWeights(inputValue, unit, width);
-    if (result.gsm !== null) onChangeGsm(String(result.gsm));
+    applyResult(computeFabricWeights(inputValue, unit, width));
   };
 
   const handleWidthChange = (val) => {
     onChangeWidth(val);
-    const result = computeFabricWeights(inputValue, inputUnit, val);
-    if (result.gsm !== null) onChangeGsm(String(result.gsm));
+    applyResult(computeFabricWeights(inputValue, inputUnit, val));
   };
 
   return (
