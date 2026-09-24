@@ -152,6 +152,28 @@ create table if not exists public.inventory (
 );
 create index if not exists inventory_user_idx on public.inventory (user_id);
 
+-- ---------- price_list (mill rate sheet) ----------
+create table if not exists public.price_list (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  category text,
+  rp_number text,
+  mill_name text,
+  width text,
+  construction text,
+  glm text,
+  gsm text,
+  oz text,
+  packing_type text,
+  rfd_rate text,
+  dyed_rate text,
+  list_date date,
+  remarks text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists price_list_user_idx on public.price_list (user_id);
+
 -- ---------- collections (seasonal planner) ----------
 create table if not exists public.collections (
   id uuid primary key,
@@ -199,7 +221,7 @@ do $$
 declare
   t text;
 begin
-  for t in select unnest(array['customers','products','tickets','followups','calls','inventory','collections','visits','attachments'])
+  for t in select unnest(array['customers','products','tickets','followups','calls','inventory','collections','visits','attachments','price_list'])
   loop
     execute format('alter table public.%I enable row level security;', t);
     execute format('create policy "select own rows" on public.%I for select using (auth.uid() = user_id);', t);
