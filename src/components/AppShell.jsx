@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, FileText, LineChart, Package, FileBarChart, Tags, Settings as SettingsIcon, LogOut, Sun, Moon } from "lucide-react";
+import { LayoutDashboard, Users, FileText, LineChart, Package, FileBarChart, Tags, Settings as SettingsIcon, LogOut, Sun, Moon, MoreHorizontal, X } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useTheme } from "../context/ThemeContext.jsx";
 import OverdueReminderPopup from "./OverdueReminderPopup.jsx";
@@ -17,14 +18,16 @@ const NAV = [
   { to: "/reports", label: "Reports", icon: FileBarChart },
 ];
 
-// Mobile bottom nav — 5 slots, covers the daily flow. Inventory and
-// Price List stay desktop-sidebar-only, same as before.
+// Mobile bottom nav — 5 daily-use slots, plus a "More" sheet for the rest.
 const MOBILE_NAV = [NAV[0], NAV[1], NAV[2], NAV[3], NAV[6]];
+const MORE_NAV = [NAV[4], NAV[5]]; // Inventory, Price List
 
 export default function AppShell() {
   const { session, permissions, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { pathname } = useLocation();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreActive = MORE_NAV.some((n) => pathname === n.to);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -116,6 +119,44 @@ export default function AppShell() {
         </div>
       </main>
 
+      {/* Mobile "More" sheet — Inventory, Price List */}
+      {moreOpen && (
+        <div className="sm:hidden fixed inset-0 z-40" onClick={() => setMoreOpen(false)}>
+          <div className="absolute inset-0 bg-black/30" />
+          <div
+            className="absolute bottom-16 left-0 right-0 bg-panel border-t border-line rounded-t-2xl p-4 pb-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-semibold text-ink">More</span>
+              <button onClick={() => setMoreOpen(false)} className="text-muted" aria-label="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {MORE_NAV.map((n) => {
+                const Icon = n.icon;
+                return (
+                  <NavLink
+                    key={n.to}
+                    to={n.to}
+                    onClick={() => setMoreOpen(false)}
+                    className={({ isActive }) =>
+                      `flex flex-col items-center gap-1.5 py-4 rounded-xl text-xs font-medium ${
+                        isActive ? "bg-ink text-white" : "bg-white text-ink border border-line"
+                      }`
+                    }
+                  >
+                    <Icon size={20} strokeWidth={2} />
+                    {n.label}
+                  </NavLink>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mobile bottom nav */}
       <nav className="sm:hidden fixed bottom-0 left-0 right-0 bg-panel border-t border-line flex justify-around py-2 z-30">
         {MOBILE_NAV.map((n) => {
@@ -135,6 +176,15 @@ export default function AppShell() {
             </NavLink>
           );
         })}
+        <button
+          onClick={() => setMoreOpen(true)}
+          className={`flex flex-col items-center gap-0.5 px-2 py-1 text-xs font-medium ${
+            moreActive ? "text-ink" : "text-muted"
+          }`}
+        >
+          <MoreHorizontal size={19} strokeWidth={2} />
+          More
+        </button>
       </nav>
       </div>
     </div>
