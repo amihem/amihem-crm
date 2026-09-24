@@ -19,6 +19,7 @@ const Analytics = lazy(() => import("./pages/Analytics.jsx"));
 const Settings = lazy(() => import("./pages/Settings.jsx"));
 const Inventory = lazy(() => import("./pages/Inventory.jsx"));
 const Reports = lazy(() => import("./pages/Reports.jsx"));
+const PriceList = lazy(() => import("./pages/PriceList.jsx"));
 
 function PageLoader() {
   return (
@@ -50,6 +51,7 @@ function AuthedApp() {
                   <Route path="/analytics" element={<Analytics />} />
                   <Route path="/reports" element={<Reports />} />
                   <Route path="/inventory" element={<Inventory />} />
+                  <Route path="/price-list" element={<PriceList />} />
                   <Route path="/settings" element={<Settings />} />
                 </Route>
               </Routes>
