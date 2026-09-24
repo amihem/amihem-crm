@@ -111,6 +111,8 @@ export const SEASONS = ["Spring/Summer", "Autumn/Winter", "Festive", "School Uni
 // (Dashboard + Inventory page both use this).
 export const LOW_STOCK_THRESHOLD = 2;
 
+export const PRICE_LIST_PACKING = ["LUMP", "ROLL", "FOLDED"];
+
 // Shape reference (not enforced, just documentation):
 //
 // Customer { id, name, company, gst, city, state, country, buyerName,
