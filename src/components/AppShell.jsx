@@ -18,9 +18,10 @@ const NAV = [
   { to: "/reports", label: "Reports", icon: FileBarChart },
 ];
 
-// Mobile bottom nav — 5 daily-use slots, plus a "More" sheet for the rest.
-const MOBILE_NAV = [NAV[0], NAV[1], NAV[2], NAV[3], NAV[6]];
-const MORE_NAV = [NAV[4], NAV[5]]; // Inventory, Price List
+// Mobile bottom nav — Dashboard, Samples, Price List, Masters are the
+// daily-use slots; everything else lives in the "More" sheet.
+const MOBILE_NAV = [NAV[0], NAV[2], NAV[5], NAV[1]];
+const MORE_NAV = [NAV[3], NAV[4], NAV[6]]; // Analytics, Inventory, Reports
 
 export default function AppShell() {
   const { session, permissions, logout } = useAuth();
