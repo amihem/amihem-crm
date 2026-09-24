@@ -134,6 +134,22 @@ const PRODUCT_COLUMN_MAP = {
   remarks: ["remarks", "notes"],
 };
 
+const PRICE_LIST_COLUMN_MAP = {
+  category: ["category"],
+  rpNumber: ["rp no.", "rp no", "rp number", "rpnumber"],
+  millName: ["mill", "mill name"],
+  width: ["width"],
+  construction: ["construction"],
+  glm: ["glm"],
+  gsm: ["gsm"],
+  oz: ["oz"],
+  packingType: ["packing", "packing type"],
+  rfdRate: ["rfd rate", "rfd"],
+  dyedRate: ["dyed rate", "dyed"],
+  listDate: ["list date", "list updated date"],
+  remarks: ["remarks", "notes"],
+};
+
 function mapRow(row, columnMap) {
   const lowerRow = {};
   Object.entries(row).forEach(([k, v]) => { lowerRow[k.trim().toLowerCase()] = v; });
@@ -156,4 +172,8 @@ export function mapCustomerRows(rows) {
 
 export function mapProductRows(rows) {
   return rows.map((r) => mapRow(r, PRODUCT_COLUMN_MAP)).filter((r) => r.qualityName);
+}
+
+export function mapPriceListRows(rows) {
+  return rows.map((r) => mapRow(r, PRICE_LIST_COLUMN_MAP)).filter((r) => r.rpNumber || r.millName);
 }
