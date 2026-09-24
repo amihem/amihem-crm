@@ -9,4 +9,5 @@ export const STORES = {
   calls: "calls",
   inventory: "inventory",
   attachments: "attachments",
+  priceList: "price_list",
 };
