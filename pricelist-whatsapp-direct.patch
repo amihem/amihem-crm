@@ -1,0 +1,201 @@
+diff --git a/src/pages/PriceList.jsx b/src/pages/PriceList.jsx
+index 9c6244e..057af82 100644
+--- a/src/pages/PriceList.jsx
++++ b/src/pages/PriceList.jsx
+@@ -5,12 +5,47 @@ import { useAuth } from "../context/AuthContext.jsx";
+ import { useConfirm } from "../context/ConfirmContext.jsx";
+ import { useToast } from "../context/ToastContext.jsx";
+ import Modal from "../components/Modal.jsx";
+-import FabricWeightFields from "../components/FabricWeightFields.jsx";
+ import { Field, TextInput, Select } from "../components/FormField.jsx";
+ import { PRICE_LIST_PACKING } from "../data/schema";
+ import { formatCurrency, toCSV, downloadCSV, buildPDF, downloadBlob, shareOrDownloadPDF, formatDate } from "../utils/helpers";
+ import { parseSpreadsheet, mapPriceListRows } from "../services/backupImport";
+ 
++// Official-style WhatsApp glyph — lucide has no brand icon for it, and a
++// generic chat bubble (Share2/MessageCircle) doesn't read as "WhatsApp"
++// at a glance the way this does.
++function WhatsAppIcon({ size = 14 }) {
++  return (
++    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
++      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.876 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z" />
++      <path d="M12.014 2C6.487 2 2 6.487 2 12.014a9.98 9.98 0 0 0 1.464 5.222L2 22l4.898-1.437a9.98 9.98 0 0 0 5.116 1.405h.004c5.527 0 10.014-4.487 10.014-10.014C22.032 6.427 17.545 2 12.014 2zm0 18.166a8.13 8.13 0 0 1-4.147-1.135l-.297-.176-3.082.904.917-3.007-.194-.31a8.11 8.11 0 0 1-1.245-4.328c0-4.484 3.649-8.132 8.152-8.132 2.176 0 4.221.848 5.76 2.388a8.086 8.086 0 0 1 2.388 5.752c-.004 4.484-3.652 8.136-8.156 8.136z" />
++    </svg>
++  );
++}
++
++function buildPriceMessage(item) {
++  return `${item.category || "Fabric"} — ${item.construction || ""}\nMill: ${item.millName || "—"}\nWidth: ${item.width || "—"} | GSM: ${item.gsm || "—"} | OZ: ${item.oz || "—"}\nPacking: ${item.packingType || "—"}\n\nRFD Rate: ₹${item.rfdRate ? formatCurrency(item.rfdRate) : "—"}\nDyed Rate: ₹${item.dyedRate ? formatCurrency(item.dyedRate) : "—"}\n\n${item.listDate ? `Rate as of ${formatDate(item.listDate)}` : ""}`;
++}
++
++// Sorts "RPF-2" before "RPF-10" instead of plain alphabetical order,
++// by comparing the numeric run in each segment where one exists.
++function naturalCompare(a = "", b = "") {
++  const ax = String(a).match(/(\d+|\D+)/g) || [];
++  const bx = String(b).match(/(\d+|\D+)/g) || [];
++  const len = Math.max(ax.length, bx.length);
++  for (let i = 0; i < len; i++) {
++    const av = ax[i] || "", bv = bx[i] || "";
++    const an = /^\d+$/.test(av), bn = /^\d+$/.test(bv);
++    if (an && bn) {
++      const diff = Number(av) - Number(bv);
++      if (diff !== 0) return diff;
++    } else {
++      const diff = av.localeCompare(bv);
++      if (diff !== 0) return diff;
++    }
++  }
++  return 0;
++}
++
+ function todayStr() {
+   return new Date().toISOString().slice(0, 10);
+ }
+@@ -47,7 +82,6 @@ export default function PriceList() {
+   const [editing, setEditing] = useState(null);
+   const [pdfMenuOpen, setPdfMenuOpen] = useState(false);
+   const [busy, setBusy] = useState(false);
+-  const [shareItem, setShareItem] = useState(null);
+ 
+   const categories = useMemo(
+     () => Array.from(new Set(items.map((i) => i.category).filter(Boolean))).sort(),
+@@ -59,7 +93,7 @@ export default function PriceList() {
+     return items
+       .filter((i) => !categoryFilter || i.category === categoryFilter)
+       .filter((i) => !q || [i.rpNumber, i.millName, i.construction, i.category].filter(Boolean).join(" ").toLowerCase().includes(q))
+-      .sort((a, b) => (a.category || "").localeCompare(b.category || "") || (a.rpNumber || "").localeCompare(b.rpNumber || ""));
++      .sort((a, b) => naturalCompare(a.category, b.category) || naturalCompare(a.rpNumber, b.rpNumber));
+   }, [items, query, categoryFilter]);
+ 
+   const handleSave = async (form) => {
+@@ -82,15 +116,27 @@ export default function PriceList() {
+     try {
+       const rows = await parseSpreadsheet(file);
+       const mapped = mapPriceListRows(rows);
+-      let imported = 0;
++      let created = 0;
++      let updated = 0;
+       for (const record of mapped) {
+-        const isDup = items.some((i) => i.rpNumber && record.rpNumber && i.rpNumber.trim().toLowerCase() === record.rpNumber.trim().toLowerCase());
+-        if (isDup) continue;
+-        await save(record);
+-        imported += 1;
++        const existing = items.find((i) => i.rpNumber && record.rpNumber && i.rpNumber.trim().toLowerCase() === record.rpNumber.trim().toLowerCase());
++        if (existing) {
++          // Merge in only the non-empty fields from this row, so blank
++          // cells in the sheet don't wipe out data already on file —
++          // this is what lets a re-import patch in GLM/GSM/OZ (or any
++          // other field) for rows that already exist.
++          const merged = { ...existing };
++          for (const key of Object.keys(record)) {
++            if (record[key]) merged[key] = record[key];
++          }
++          await save(merged);
++          updated += 1;
++        } else {
++          await save(record);
++          created += 1;
++        }
+       }
+-      const skipped = mapped.length - imported;
+-      showToast(`Imported ${imported} item(s) from ${rows.length} rows${skipped > 0 ? ` (${skipped} skipped as duplicates)` : ""}.`, "success");
++      showToast(`Imported ${created} new item(s), updated ${updated} existing from ${rows.length} rows.`, "success");
+     } catch (err) {
+       showToast(err.message || "Could not read that file.", "error");
+     } finally {
+@@ -215,12 +261,17 @@ export default function PriceList() {
+                 <td className="px-4 py-3 text-muted">{i.construction || "—"}</td>
+                 <td className="px-4 py-3 text-muted text-xs">{[i.glm, i.gsm, i.oz].filter(Boolean).join(" / ") || "—"}</td>
+                 <td className="px-4 py-3 text-muted">{i.packingType || "—"}</td>
+-                <td className="px-4 py-3 font-semibold">{i.rfdRate ? `₹${formatCurrency(i.rfdRate)}` : "—"}</td>
+-                <td className="px-4 py-3 font-semibold">{i.dyedRate ? `₹${formatCurrency(i.dyedRate)}` : "—"}</td>
++                <td className="px-4 py-3 font-semibold">{i.rfdRate ? `₹${formatCurrency(i.rfdRate, 2)}` : "—"}</td>
++                <td className="px-4 py-3 font-semibold">{i.dyedRate ? `₹${formatCurrency(i.dyedRate, 2)}` : "—"}</td>
+                 <td className="px-4 py-3 text-right whitespace-nowrap">
+-                  <button onClick={() => setShareItem(i)} className="text-ink2 hover:text-ink mr-2" title="Share via WhatsApp">
+-                    <Share2 size={14} />
+-                  </button>
++                  <a
++                    href={`https://wa.me/?text=${encodeURIComponent(buildPriceMessage(i))}`}
++                    target="_blank" rel="noreferrer"
++                    className="text-[#25D366] hover:opacity-80 mr-2 inline-flex"
++                    title="Send via WhatsApp"
++                  >
++                    <WhatsAppIcon size={16} />
++                  </a>
+                   <button onClick={() => setEditing(i)} className="text-ink2 hover:text-ink mr-2" title="Edit">
+                     <Pencil size={14} />
+                   </button>
+@@ -261,10 +312,6 @@ export default function PriceList() {
+           </button>
+         </div>
+       </Modal>
+-
+-      <Modal open={!!shareItem} onClose={() => setShareItem(null)} title="Share Rate">
+-        {shareItem && <SharePriceItem item={shareItem} onClose={() => setShareItem(null)} />}
+-      </Modal>
+     </div>
+   );
+ }
+@@ -294,18 +341,13 @@ function PriceListForm({ initial, categories, onSave, onCancel }) {
+         <TextInput type="date" value={form.listDate} onChange={set("listDate")} />
+       </Field>
+ 
+-      <FabricWeightFields
+-        width={form.width}
+-        gsm={form.gsm}
+-        onChangeWidth={(v) => setForm((f) => ({ ...f, width: v }))}
+-        onChangeGsm={(v) => setForm((f) => ({ ...f, gsm: v }))}
+-        onChangeAll={(result) => setForm((f) => ({
+-          ...f,
+-          gsm: result.gsm !== null ? String(result.gsm) : f.gsm,
+-          glm: result.glm !== null ? String(result.glm) : f.glm,
+-          oz: result.oz !== null ? String(result.oz) : f.oz,
+-        }))}
+-      />
++      <Field label="Width (inch)"><TextInput value={form.width} onChange={set("width")} placeholder="e.g. 58" /></Field>
++
++      <div className="sm:col-span-2 grid grid-cols-3 gap-3">
++        <Field label="GLM"><TextInput type="number" value={form.glm} onChange={set("glm")} placeholder="g/linear m" /></Field>
++        <Field label="GSM"><TextInput type="number" value={form.gsm} onChange={set("gsm")} placeholder="g/m²" /></Field>
++        <Field label="OZ"><TextInput type="number" value={form.oz} onChange={set("oz")} placeholder="oz/yd²" /></Field>
++      </div>
+ 
+       <Field label="RFD Rate (₹)"><TextInput type="number" value={form.rfdRate} onChange={setRate("rfdRate")} /></Field>
+       <Field label="Dyed Rate (₹)"><TextInput type="number" value={form.dyedRate} onChange={setRate("dyedRate")} /></Field>
+@@ -317,35 +359,3 @@ function PriceListForm({ initial, categories, onSave, onCancel }) {
+     </form>
+   );
+ }
+-
+-// Sends one rate to a customer over WhatsApp — no phone number stored
+-// against a price-list item, so this asks for one at share time rather
+-// than requiring a customer link on every row.
+-function SharePriceItem({ item, onClose }) {
+-  const [phone, setPhone] = useState("");
+-
+-  const message = `${item.category || "Fabric"} — ${item.construction || ""}\nMill: ${item.millName || "—"}\nWidth: ${item.width || "—"} | GSM: ${item.gsm || "—"} | OZ: ${item.oz || "—"}\nPacking: ${item.packingType || "—"}\n\nRFD Rate: ₹${item.rfdRate ? formatCurrency(item.rfdRate) : "—"}\nDyed Rate: ₹${item.dyedRate ? formatCurrency(item.dyedRate) : "—"}\n\n${item.listDate ? `Rate as of ${formatDate(item.listDate)}` : ""}`;
+-
+-  const digits = String(phone).replace(/\D/g, "");
+-  const link = digits ? `https://wa.me/91${digits.slice(-10)}?text=${encodeURIComponent(message)}` : null;
+-
+-  return (
+-    <div className="flex flex-col gap-3">
+-      <Field label="Customer's WhatsApp Number">
+-        <TextInput value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit mobile number" />
+-      </Field>
+-      <div className="bg-paper border border-line rounded-lg p-3 text-xs whitespace-pre-wrap text-ink/80">{message}</div>
+-      <div className="flex justify-end gap-2">
+-        <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Cancel</button>
+-        <a
+-          href={link || "#"}
+-          target="_blank" rel="noreferrer"
+-          onClick={(e) => { if (!link) e.preventDefault(); else onClose(); }}
+-          className={`px-4 py-2 rounded-lg text-sm font-semibold text-white ${link ? "bg-loom hover:opacity-90" : "bg-muted cursor-not-allowed"}`}
+-        >
+-          Send via WhatsApp
+-        </a>
+-      </div>
+-    </div>
+-  );
+-}
