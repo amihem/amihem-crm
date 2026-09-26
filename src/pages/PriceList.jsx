@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Plus, Upload, FileSpreadsheet, FileText, Share2, Pencil, Trash2, Search } from "lucide-react";
-import { usePriceList, useCustomers } from "../context/domains.jsx";
+import { usePriceList } from "../context/domains.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
@@ -9,6 +9,22 @@ import { Field, TextInput, Select } from "../components/FormField.jsx";
 import { PRICE_LIST_PACKING } from "../data/schema";
 import { formatCurrency, toCSV, downloadCSV, buildPDF, downloadBlob, shareOrDownloadPDF, formatDate } from "../utils/helpers";
 import { parseSpreadsheet, mapPriceListRows } from "../services/backupImport";
+
+// Official-style WhatsApp glyph — lucide has no brand icon for it, and a
+// generic chat bubble (Share2/MessageCircle) doesn't read as "WhatsApp"
+// at a glance the way this does.
+function WhatsAppIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.876 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z" />
+      <path d="M12.014 2C6.487 2 2 6.487 2 12.014a9.98 9.98 0 0 0 1.464 5.222L2 22l4.898-1.437a9.98 9.98 0 0 0 5.116 1.405h.004c5.527 0 10.014-4.487 10.014-10.014C22.032 6.427 17.545 2 12.014 2zm0 18.166a8.13 8.13 0 0 1-4.147-1.135l-.297-.176-3.082.904.917-3.007-.194-.31a8.11 8.11 0 0 1-1.245-4.328c0-4.484 3.649-8.132 8.152-8.132 2.176 0 4.221.848 5.76 2.388a8.086 8.086 0 0 1 2.388 5.752c-.004 4.484-3.652 8.136-8.156 8.136z" />
+    </svg>
+  );
+}
+
+function buildPriceMessage(item) {
+  return `${item.category || "Fabric"} — ${item.construction || ""}\nMill: ${item.millName || "—"}\nWidth: ${item.width || "—"} | GSM: ${item.gsm || "—"} | OZ: ${item.oz || "—"}\nPacking: ${item.packingType || "—"}\n\nRFD Rate: ₹${item.rfdRate ? formatCurrency(item.rfdRate) : "—"}\nDyed Rate: ₹${item.dyedRate ? formatCurrency(item.dyedRate) : "—"}\n\n${item.listDate ? `Rate as of ${formatDate(item.listDate)}` : ""}`;
+}
 
 // Sorts "RPF-2" before "RPF-10" instead of plain alphabetical order,
 // by comparing the numeric run in each segment where one exists.
@@ -66,7 +82,6 @@ export default function PriceList() {
   const [editing, setEditing] = useState(null);
   const [pdfMenuOpen, setPdfMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [shareItem, setShareItem] = useState(null);
 
   const categories = useMemo(
     () => Array.from(new Set(items.map((i) => i.category).filter(Boolean))).sort(),
@@ -249,9 +264,14 @@ export default function PriceList() {
                 <td className="px-4 py-3 font-semibold">{i.rfdRate ? `₹${formatCurrency(i.rfdRate, 2)}` : "—"}</td>
                 <td className="px-4 py-3 font-semibold">{i.dyedRate ? `₹${formatCurrency(i.dyedRate, 2)}` : "—"}</td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
-                  <button onClick={() => setShareItem(i)} className="text-ink2 hover:text-ink mr-2" title="Share via WhatsApp">
-                    <Share2 size={14} />
-                  </button>
+                  <a
+                    href={`https://wa.me/?text=${encodeURIComponent(buildPriceMessage(i))}`}
+                    target="_blank" rel="noreferrer"
+                    className="text-[#25D366] hover:opacity-80 mr-2 inline-flex"
+                    title="Send via WhatsApp"
+                  >
+                    <WhatsAppIcon size={16} />
+                  </a>
                   <button onClick={() => setEditing(i)} className="text-ink2 hover:text-ink mr-2" title="Edit">
                     <Pencil size={14} />
                   </button>
@@ -291,10 +311,6 @@ export default function PriceList() {
             </div>
           </button>
         </div>
-      </Modal>
-
-      <Modal open={!!shareItem} onClose={() => setShareItem(null)} title="Share Rate">
-        {shareItem && <SharePriceItem item={shareItem} onClose={() => setShareItem(null)} />}
       </Modal>
     </div>
   );
@@ -341,63 +357,5 @@ function PriceListForm({ initial, categories, onSave, onCancel }) {
         <button type="submit" className="px-4 py-2 rounded-lg text-sm font-semibold bg-ink text-white hover:bg-ink2">Save</button>
       </div>
     </form>
-  );
-}
-
-// Sends one rate to a customer over WhatsApp — no phone number stored
-// against a price-list item, so this asks for one at share time rather
-// than requiring a customer link on every row.
-function SharePriceItem({ item, onClose }) {
-  const { items: customers } = useCustomers();
-  const [customerId, setCustomerId] = useState("");
-
-  const sortedCustomers = useMemo(
-    () => [...customers].filter((c) => c.phone || c.whatsapp).sort((a, b) => (a.name || "").localeCompare(b.name || "")),
-    [customers]
-  );
-
-  const selectedCustomer = customers.find((c) => c.id === customerId);
-  const effectivePhone = selectedCustomer ? (selectedCustomer.whatsapp || selectedCustomer.phone) : "";
-
-  const message = `${item.category || "Fabric"} — ${item.construction || ""}\nMill: ${item.millName || "—"}\nWidth: ${item.width || "—"} | GSM: ${item.gsm || "—"} | OZ: ${item.oz || "—"}\nPacking: ${item.packingType || "—"}\n\nRFD Rate: ₹${item.rfdRate ? formatCurrency(item.rfdRate) : "—"}\nDyed Rate: ₹${item.dyedRate ? formatCurrency(item.dyedRate) : "—"}\n\n${item.listDate ? `Rate as of ${formatDate(item.listDate)}` : ""}`;
-
-  // With a saved customer picked, go straight to that number's chat.
-  // Otherwise open WhatsApp itself with the message pre-filled and let
-  // the person pick any contact from their own WhatsApp — no typing a
-  // number here at all.
-  const digits = String(effectivePhone).replace(/\D/g, "");
-  const link = digits
-    ? `https://wa.me/91${digits.slice(-10)}?text=${encodeURIComponent(message)}`
-    : `https://wa.me/?text=${encodeURIComponent(message)}`;
-
-  return (
-    <div className="flex flex-col gap-3">
-      {sortedCustomers.length > 0 && (
-        <Field label="Saved Customer (optional — skips the contact picker)">
-          <select
-            value={customerId}
-            onChange={(e) => setCustomerId(e.target.value)}
-            className="border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2"
-          >
-            <option value="">— Choose contact in WhatsApp instead —</option>
-            {sortedCustomers.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </Field>
-      )}
-      <div className="bg-paper border border-line rounded-lg p-3 text-xs whitespace-pre-wrap text-ink/80">{message}</div>
-      <div className="flex justify-end gap-2">
-        <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Cancel</button>
-        <a
-          href={link}
-          target="_blank" rel="noreferrer"
-          onClick={onClose}
-          className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-loom hover:opacity-90"
-        >
-          {selectedCustomer ? "Send via WhatsApp" : "Open WhatsApp & Choose Contact"}
-        </a>
-      </div>
-    </div>
   );
 }
