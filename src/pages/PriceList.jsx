@@ -350,7 +350,6 @@ function PriceListForm({ initial, categories, onSave, onCancel }) {
 function SharePriceItem({ item, onClose }) {
   const { items: customers } = useCustomers();
   const [customerId, setCustomerId] = useState("");
-  const [phone, setPhone] = useState("");
 
   const sortedCustomers = useMemo(
     () => [...customers].filter((c) => c.phone || c.whatsapp).sort((a, b) => (a.name || "").localeCompare(b.name || "")),
@@ -358,44 +357,45 @@ function SharePriceItem({ item, onClose }) {
   );
 
   const selectedCustomer = customers.find((c) => c.id === customerId);
-  const effectivePhone = selectedCustomer ? (selectedCustomer.whatsapp || selectedCustomer.phone) : phone;
+  const effectivePhone = selectedCustomer ? (selectedCustomer.whatsapp || selectedCustomer.phone) : "";
 
   const message = `${item.category || "Fabric"} — ${item.construction || ""}\nMill: ${item.millName || "—"}\nWidth: ${item.width || "—"} | GSM: ${item.gsm || "—"} | OZ: ${item.oz || "—"}\nPacking: ${item.packingType || "—"}\n\nRFD Rate: ₹${item.rfdRate ? formatCurrency(item.rfdRate) : "—"}\nDyed Rate: ₹${item.dyedRate ? formatCurrency(item.dyedRate) : "—"}\n\n${item.listDate ? `Rate as of ${formatDate(item.listDate)}` : ""}`;
 
+  // With a saved customer picked, go straight to that number's chat.
+  // Otherwise open WhatsApp itself with the message pre-filled and let
+  // the person pick any contact from their own WhatsApp — no typing a
+  // number here at all.
   const digits = String(effectivePhone).replace(/\D/g, "");
-  const link = digits ? `https://wa.me/91${digits.slice(-10)}?text=${encodeURIComponent(message)}` : null;
+  const link = digits
+    ? `https://wa.me/91${digits.slice(-10)}?text=${encodeURIComponent(message)}`
+    : `https://wa.me/?text=${encodeURIComponent(message)}`;
 
   return (
     <div className="flex flex-col gap-3">
       {sortedCustomers.length > 0 && (
-        <Field label="Saved Customer (optional)">
+        <Field label="Saved Customer (optional — skips the contact picker)">
           <select
             value={customerId}
-            onChange={(e) => { setCustomerId(e.target.value); setPhone(""); }}
+            onChange={(e) => setCustomerId(e.target.value)}
             className="border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2"
           >
-            <option value="">— Type a number instead —</option>
+            <option value="">— Choose contact in WhatsApp instead —</option>
             {sortedCustomers.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
         </Field>
       )}
-      {!customerId && (
-        <Field label="Customer's WhatsApp Number">
-          <TextInput value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit mobile number" />
-        </Field>
-      )}
       <div className="bg-paper border border-line rounded-lg p-3 text-xs whitespace-pre-wrap text-ink/80">{message}</div>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Cancel</button>
         <a
-          href={link || "#"}
+          href={link}
           target="_blank" rel="noreferrer"
-          onClick={(e) => { if (!link) e.preventDefault(); else onClose(); }}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold text-white ${link ? "bg-loom hover:opacity-90" : "bg-muted cursor-not-allowed"}`}
+          onClick={onClose}
+          className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-loom hover:opacity-90"
         >
-          Send via WhatsApp
+          {selectedCustomer ? "Send via WhatsApp" : "Open WhatsApp & Choose Contact"}
         </a>
       </div>
     </div>
