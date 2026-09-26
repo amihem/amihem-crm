@@ -1,0 +1,188 @@
+diff --git a/src/pages/PriceList.jsx b/src/pages/PriceList.jsx
+index 9c6244e..3fd0030 100644
+--- a/src/pages/PriceList.jsx
++++ b/src/pages/PriceList.jsx
+@@ -1,16 +1,35 @@
+ import { useMemo, useRef, useState } from "react";
+ import { Plus, Upload, FileSpreadsheet, FileText, Share2, Pencil, Trash2, Search } from "lucide-react";
+-import { usePriceList } from "../context/domains.jsx";
++import { usePriceList, useCustomers } from "../context/domains.jsx";
+ import { useAuth } from "../context/AuthContext.jsx";
+ import { useConfirm } from "../context/ConfirmContext.jsx";
+ import { useToast } from "../context/ToastContext.jsx";
+ import Modal from "../components/Modal.jsx";
+-import FabricWeightFields from "../components/FabricWeightFields.jsx";
+ import { Field, TextInput, Select } from "../components/FormField.jsx";
+ import { PRICE_LIST_PACKING } from "../data/schema";
+ import { formatCurrency, toCSV, downloadCSV, buildPDF, downloadBlob, shareOrDownloadPDF, formatDate } from "../utils/helpers";
+ import { parseSpreadsheet, mapPriceListRows } from "../services/backupImport";
+ 
++// Sorts "RPF-2" before "RPF-10" instead of plain alphabetical order,
++// by comparing the numeric run in each segment where one exists.
++function naturalCompare(a = "", b = "") {
++  const ax = String(a).match(/(\d+|\D+)/g) || [];
++  const bx = String(b).match(/(\d+|\D+)/g) || [];
++  const len = Math.max(ax.length, bx.length);
++  for (let i = 0; i < len; i++) {
++    const av = ax[i] || "", bv = bx[i] || "";
++    const an = /^\d+$/.test(av), bn = /^\d+$/.test(bv);
++    if (an && bn) {
++      const diff = Number(av) - Number(bv);
++      if (diff !== 0) return diff;
++    } else {
++      const diff = av.localeCompare(bv);
++      if (diff !== 0) return diff;
++    }
++  }
++  return 0;
++}
++
+ function todayStr() {
+   return new Date().toISOString().slice(0, 10);
+ }
+@@ -59,7 +78,7 @@ export default function PriceList() {
+     return items
+       .filter((i) => !categoryFilter || i.category === categoryFilter)
+       .filter((i) => !q || [i.rpNumber, i.millName, i.construction, i.category].filter(Boolean).join(" ").toLowerCase().includes(q))
+-      .sort((a, b) => (a.category || "").localeCompare(b.category || "") || (a.rpNumber || "").localeCompare(b.rpNumber || ""));
++      .sort((a, b) => naturalCompare(a.category, b.category) || naturalCompare(a.rpNumber, b.rpNumber));
+   }, [items, query, categoryFilter]);
+ 
+   const handleSave = async (form) => {
+@@ -82,15 +101,27 @@ export default function PriceList() {
+     try {
+       const rows = await parseSpreadsheet(file);
+       const mapped = mapPriceListRows(rows);
+-      let imported = 0;
++      let created = 0;
++      let updated = 0;
+       for (const record of mapped) {
+-        const isDup = items.some((i) => i.rpNumber && record.rpNumber && i.rpNumber.trim().toLowerCase() === record.rpNumber.trim().toLowerCase());
+-        if (isDup) continue;
+-        await save(record);
+-        imported += 1;
++        const existing = items.find((i) => i.rpNumber && record.rpNumber && i.rpNumber.trim().toLowerCase() === record.rpNumber.trim().toLowerCase());
++        if (existing) {
++          // Merge in only the non-empty fields from this row, so blank
++          // cells in the sheet don't wipe out data already on file —
++          // this is what lets a re-import patch in GLM/GSM/OZ (or any
++          // other field) for rows that already exist.
++          const merged = { ...existing };
++          for (const key of Object.keys(record)) {
++            if (record[key]) merged[key] = record[key];
++          }
++          await save(merged);
++          updated += 1;
++        } else {
++          await save(record);
++          created += 1;
++        }
+       }
+-      const skipped = mapped.length - imported;
+-      showToast(`Imported ${imported} item(s) from ${rows.length} rows${skipped > 0 ? ` (${skipped} skipped as duplicates)` : ""}.`, "success");
++      showToast(`Imported ${created} new item(s), updated ${updated} existing from ${rows.length} rows.`, "success");
+     } catch (err) {
+       showToast(err.message || "Could not read that file.", "error");
+     } finally {
+@@ -215,8 +246,8 @@ export default function PriceList() {
+                 <td className="px-4 py-3 text-muted">{i.construction || "—"}</td>
+                 <td className="px-4 py-3 text-muted text-xs">{[i.glm, i.gsm, i.oz].filter(Boolean).join(" / ") || "—"}</td>
+                 <td className="px-4 py-3 text-muted">{i.packingType || "—"}</td>
+-                <td className="px-4 py-3 font-semibold">{i.rfdRate ? `₹${formatCurrency(i.rfdRate)}` : "—"}</td>
+-                <td className="px-4 py-3 font-semibold">{i.dyedRate ? `₹${formatCurrency(i.dyedRate)}` : "—"}</td>
++                <td className="px-4 py-3 font-semibold">{i.rfdRate ? `₹${formatCurrency(i.rfdRate, 2)}` : "—"}</td>
++                <td className="px-4 py-3 font-semibold">{i.dyedRate ? `₹${formatCurrency(i.dyedRate, 2)}` : "—"}</td>
+                 <td className="px-4 py-3 text-right whitespace-nowrap">
+                   <button onClick={() => setShareItem(i)} className="text-ink2 hover:text-ink mr-2" title="Share via WhatsApp">
+                     <Share2 size={14} />
+@@ -294,18 +325,13 @@ function PriceListForm({ initial, categories, onSave, onCancel }) {
+         <TextInput type="date" value={form.listDate} onChange={set("listDate")} />
+       </Field>
+ 
+-      <FabricWeightFields
+-        width={form.width}
+-        gsm={form.gsm}
+-        onChangeWidth={(v) => setForm((f) => ({ ...f, width: v }))}
+-        onChangeGsm={(v) => setForm((f) => ({ ...f, gsm: v }))}
+-        onChangeAll={(result) => setForm((f) => ({
+-          ...f,
+-          gsm: result.gsm !== null ? String(result.gsm) : f.gsm,
+-          glm: result.glm !== null ? String(result.glm) : f.glm,
+-          oz: result.oz !== null ? String(result.oz) : f.oz,
+-        }))}
+-      />
++      <Field label="Width (inch)"><TextInput value={form.width} onChange={set("width")} placeholder="e.g. 58" /></Field>
++
++      <div className="sm:col-span-2 grid grid-cols-3 gap-3">
++        <Field label="GLM"><TextInput type="number" value={form.glm} onChange={set("glm")} placeholder="g/linear m" /></Field>
++        <Field label="GSM"><TextInput type="number" value={form.gsm} onChange={set("gsm")} placeholder="g/m²" /></Field>
++        <Field label="OZ"><TextInput type="number" value={form.oz} onChange={set("oz")} placeholder="oz/yd²" /></Field>
++      </div>
+ 
+       <Field label="RFD Rate (₹)"><TextInput type="number" value={form.rfdRate} onChange={setRate("rfdRate")} /></Field>
+       <Field label="Dyed Rate (₹)"><TextInput type="number" value={form.dyedRate} onChange={setRate("dyedRate")} /></Field>
+@@ -322,28 +348,54 @@ function PriceListForm({ initial, categories, onSave, onCancel }) {
+ // against a price-list item, so this asks for one at share time rather
+ // than requiring a customer link on every row.
+ function SharePriceItem({ item, onClose }) {
+-  const [phone, setPhone] = useState("");
++  const { items: customers } = useCustomers();
++  const [customerId, setCustomerId] = useState("");
++
++  const sortedCustomers = useMemo(
++    () => [...customers].filter((c) => c.phone || c.whatsapp).sort((a, b) => (a.name || "").localeCompare(b.name || "")),
++    [customers]
++  );
++
++  const selectedCustomer = customers.find((c) => c.id === customerId);
++  const effectivePhone = selectedCustomer ? (selectedCustomer.whatsapp || selectedCustomer.phone) : "";
+ 
+   const message = `${item.category || "Fabric"} — ${item.construction || ""}\nMill: ${item.millName || "—"}\nWidth: ${item.width || "—"} | GSM: ${item.gsm || "—"} | OZ: ${item.oz || "—"}\nPacking: ${item.packingType || "—"}\n\nRFD Rate: ₹${item.rfdRate ? formatCurrency(item.rfdRate) : "—"}\nDyed Rate: ₹${item.dyedRate ? formatCurrency(item.dyedRate) : "—"}\n\n${item.listDate ? `Rate as of ${formatDate(item.listDate)}` : ""}`;
+ 
+-  const digits = String(phone).replace(/\D/g, "");
+-  const link = digits ? `https://wa.me/91${digits.slice(-10)}?text=${encodeURIComponent(message)}` : null;
++  // With a saved customer picked, go straight to that number's chat.
++  // Otherwise open WhatsApp itself with the message pre-filled and let
++  // the person pick any contact from their own WhatsApp — no typing a
++  // number here at all.
++  const digits = String(effectivePhone).replace(/\D/g, "");
++  const link = digits
++    ? `https://wa.me/91${digits.slice(-10)}?text=${encodeURIComponent(message)}`
++    : `https://wa.me/?text=${encodeURIComponent(message)}`;
+ 
+   return (
+     <div className="flex flex-col gap-3">
+-      <Field label="Customer's WhatsApp Number">
+-        <TextInput value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit mobile number" />
+-      </Field>
++      {sortedCustomers.length > 0 && (
++        <Field label="Saved Customer (optional — skips the contact picker)">
++          <select
++            value={customerId}
++            onChange={(e) => setCustomerId(e.target.value)}
++            className="border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2"
++          >
++            <option value="">— Choose contact in WhatsApp instead —</option>
++            {sortedCustomers.map((c) => (
++              <option key={c.id} value={c.id}>{c.name}</option>
++            ))}
++          </select>
++        </Field>
++      )}
+       <div className="bg-paper border border-line rounded-lg p-3 text-xs whitespace-pre-wrap text-ink/80">{message}</div>
+       <div className="flex justify-end gap-2">
+         <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Cancel</button>
+         <a
+-          href={link || "#"}
++          href={link}
+           target="_blank" rel="noreferrer"
+-          onClick={(e) => { if (!link) e.preventDefault(); else onClose(); }}
+-          className={`px-4 py-2 rounded-lg text-sm font-semibold text-white ${link ? "bg-loom hover:opacity-90" : "bg-muted cursor-not-allowed"}`}
++          onClick={onClose}
++          className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-loom hover:opacity-90"
+         >
+-          Send via WhatsApp
++          {selectedCustomer ? "Send via WhatsApp" : "Open WhatsApp & Choose Contact"}
+         </a>
+       </div>
+     </div>
