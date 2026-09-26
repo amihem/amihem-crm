@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Plus, Upload, FileSpreadsheet, FileText, Share2, Pencil, Trash2, Search } from "lucide-react";
-import { usePriceList } from "../context/domains.jsx";
+import { usePriceList, useCustomers } from "../context/domains.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useConfirm } from "../context/ConfirmContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
@@ -9,6 +9,26 @@ import { Field, TextInput, Select } from "../components/FormField.jsx";
 import { PRICE_LIST_PACKING } from "../data/schema";
 import { formatCurrency, toCSV, downloadCSV, buildPDF, downloadBlob, shareOrDownloadPDF, formatDate } from "../utils/helpers";
 import { parseSpreadsheet, mapPriceListRows } from "../services/backupImport";
+
+// Sorts "RPF-2" before "RPF-10" instead of plain alphabetical order,
+// by comparing the numeric run in each segment where one exists.
+function naturalCompare(a = "", b = "") {
+  const ax = String(a).match(/(\d+|\D+)/g) || [];
+  const bx = String(b).match(/(\d+|\D+)/g) || [];
+  const len = Math.max(ax.length, bx.length);
+  for (let i = 0; i < len; i++) {
+    const av = ax[i] || "", bv = bx[i] || "";
+    const an = /^\d+$/.test(av), bn = /^\d+$/.test(bv);
+    if (an && bn) {
+      const diff = Number(av) - Number(bv);
+      if (diff !== 0) return diff;
+    } else {
+      const diff = av.localeCompare(bv);
+      if (diff !== 0) return diff;
+    }
+  }
+  return 0;
+}
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -58,7 +78,7 @@ export default function PriceList() {
     return items
       .filter((i) => !categoryFilter || i.category === categoryFilter)
       .filter((i) => !q || [i.rpNumber, i.millName, i.construction, i.category].filter(Boolean).join(" ").toLowerCase().includes(q))
-      .sort((a, b) => (a.category || "").localeCompare(b.category || "") || (a.rpNumber || "").localeCompare(b.rpNumber || ""));
+      .sort((a, b) => naturalCompare(a.category, b.category) || naturalCompare(a.rpNumber, b.rpNumber));
   }, [items, query, categoryFilter]);
 
   const handleSave = async (form) => {
@@ -328,18 +348,44 @@ function PriceListForm({ initial, categories, onSave, onCancel }) {
 // against a price-list item, so this asks for one at share time rather
 // than requiring a customer link on every row.
 function SharePriceItem({ item, onClose }) {
+  const { items: customers } = useCustomers();
+  const [customerId, setCustomerId] = useState("");
   const [phone, setPhone] = useState("");
+
+  const sortedCustomers = useMemo(
+    () => [...customers].filter((c) => c.phone || c.whatsapp).sort((a, b) => (a.name || "").localeCompare(b.name || "")),
+    [customers]
+  );
+
+  const selectedCustomer = customers.find((c) => c.id === customerId);
+  const effectivePhone = selectedCustomer ? (selectedCustomer.whatsapp || selectedCustomer.phone) : phone;
 
   const message = `${item.category || "Fabric"} — ${item.construction || ""}\nMill: ${item.millName || "—"}\nWidth: ${item.width || "—"} | GSM: ${item.gsm || "—"} | OZ: ${item.oz || "—"}\nPacking: ${item.packingType || "—"}\n\nRFD Rate: ₹${item.rfdRate ? formatCurrency(item.rfdRate) : "—"}\nDyed Rate: ₹${item.dyedRate ? formatCurrency(item.dyedRate) : "—"}\n\n${item.listDate ? `Rate as of ${formatDate(item.listDate)}` : ""}`;
 
-  const digits = String(phone).replace(/\D/g, "");
+  const digits = String(effectivePhone).replace(/\D/g, "");
   const link = digits ? `https://wa.me/91${digits.slice(-10)}?text=${encodeURIComponent(message)}` : null;
 
   return (
     <div className="flex flex-col gap-3">
-      <Field label="Customer's WhatsApp Number">
-        <TextInput value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit mobile number" />
-      </Field>
+      {sortedCustomers.length > 0 && (
+        <Field label="Saved Customer (optional)">
+          <select
+            value={customerId}
+            onChange={(e) => { setCustomerId(e.target.value); setPhone(""); }}
+            className="border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2"
+          >
+            <option value="">— Type a number instead —</option>
+            {sortedCustomers.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </Field>
+      )}
+      {!customerId && (
+        <Field label="Customer's WhatsApp Number">
+          <TextInput value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit mobile number" />
+        </Field>
+      )}
       <div className="bg-paper border border-line rounded-lg p-3 text-xs whitespace-pre-wrap text-ink/80">{message}</div>
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold text-muted hover:bg-paper">Cancel</button>
