@@ -9,6 +9,23 @@ import { Field, TextInput, Select } from "../components/FormField.jsx";
 import { PRICE_LIST_PACKING } from "../data/schema";
 import { formatCurrency, toCSV, downloadCSV, buildPDF, downloadBlob, shareOrDownloadPDF, formatDate } from "../utils/helpers";
 import { parseSpreadsheet, mapPriceListRows } from "../services/backupImport";
+import { computeFabricWeights } from "../utils/fabricWeight.js";
+
+// Category → RP No. series prefix. Add more here if new categories
+// come into use — anything not listed just skips auto-numbering.
+const RP_PREFIX = { FORMAL: "RPF", RFD: "RPR", ECRU: "RPE" };
+
+function nextRpNumber(category, items) {
+  const prefix = RP_PREFIX[(category || "").trim().toUpperCase()];
+  if (!prefix) return "";
+  let max = 0;
+  const re = new RegExp(`^${prefix}-?(\\d+)$`, "i");
+  items.forEach((i) => {
+    const m = (i.rpNumber || "").trim().match(re);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  });
+  return `${prefix}-${max + 1}`;
+}
 
 // Official-style WhatsApp glyph — lucide has no brand icon for it, and a
 // generic chat bubble (Share2/MessageCircle) doesn't read as "WhatsApp"
@@ -291,7 +308,7 @@ export default function PriceList() {
       </div>
 
       <Modal open={!!editing} onClose={() => setEditing(null)} title={editing?.id ? "Edit Price List Item" : "Add Price List Item"} wide>
-        {editing && <PriceListForm initial={editing} categories={categories} onSave={handleSave} onCancel={() => setEditing(null)} />}
+        {editing && <PriceListForm initial={editing} categories={categories} items={items} onSave={handleSave} onCancel={() => setEditing(null)} />}
       </Modal>
 
       <Modal open={pdfMenuOpen} onClose={() => setPdfMenuOpen(false)} title="Price List PDF">
@@ -316,7 +333,7 @@ export default function PriceList() {
   );
 }
 
-function PriceListForm({ initial, categories, onSave, onCancel }) {
+function PriceListForm({ initial, categories, items, onSave, onCancel }) {
   const [form, setForm] = useState(initial);
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
@@ -326,14 +343,64 @@ function PriceListForm({ initial, categories, onSave, onCancel }) {
   // remembering to update it by hand.
   const setRate = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value, listDate: todayStr() }));
 
+  // GLM / GSM / OZ auto-calculate from whichever of the three was typed
+  // most recently, combined with Width — in either entry order. Typing
+  // stays raw text as you type it; the other two fill in once both a
+  // width and one weight value are present. Nothing is ever discarded
+  // if width is still blank — the values just don't cross-calculate yet.
+  const lastUnit = useRef(null);
+  const applyWeights = (unit, value, width) => {
+    const result = computeFabricWeights(value, unit, width);
+    if (result.gsm === null) return {};
+    const out = {};
+    if (unit !== "gsm") out.gsm = String(result.gsm);
+    if (unit !== "glm" && result.glm !== null) out.glm = String(result.glm);
+    if (unit !== "oz") out.oz = String(result.oz);
+    return out;
+  };
+  const setWeight = (unit) => (e) => {
+    const value = e.target.value;
+    lastUnit.current = unit;
+    setForm((f) => {
+      const computed = applyWeights(unit, value, f.width);
+      return { ...f, [unit]: value, ...computed };
+    });
+  };
+  const onChangeWidth = (e) => {
+    const width = e.target.value;
+    setForm((f) => {
+      const unit = lastUnit.current;
+      if (!unit || !f[unit]) return { ...f, width };
+      const computed = applyWeights(unit, f[unit], width);
+      return { ...f, width, ...computed };
+    });
+  };
+
+  // RP No. auto-fills from the category's series (RPF/RPR/RPE) on a new
+  // item, picking the next unused number in that prefix. Stops once the
+  // person edits RP No. by hand, so it never overwrites a manual entry.
+  const rpAuto = useRef(!initial.id);
+  const onChangeCategory = (e) => {
+    const category = e.target.value;
+    setForm((f) => ({
+      ...f,
+      category,
+      rpNumber: rpAuto.current ? nextRpNumber(category, items) : f.rpNumber,
+    }));
+  };
+  const onChangeRpNumber = (e) => {
+    rpAuto.current = false;
+    setForm((f) => ({ ...f, rpNumber: e.target.value }));
+  };
+
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(form); }} className="grid sm:grid-cols-2 gap-3">
       <Field label="Category">
-        <input list="pl-categories" value={form.category} onChange={set("category")} placeholder="e.g. RFD, FORMAL, ECRU"
+        <input list="pl-categories" value={form.category} onChange={onChangeCategory} placeholder="e.g. RFD, FORMAL, ECRU"
           className="border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
         <datalist id="pl-categories">{categories.map((c) => <option key={c} value={c} />)}</datalist>
       </Field>
-      <Field label="RP No."><TextInput value={form.rpNumber} onChange={set("rpNumber")} placeholder="e.g. RPF-1" /></Field>
+      <Field label="RP No."><TextInput value={form.rpNumber} onChange={onChangeRpNumber} placeholder="e.g. RPF-1" /></Field>
       <Field label="Mill Name"><TextInput value={form.millName} onChange={set("millName")} /></Field>
       <Field label="Construction / Weave"><TextInput value={form.construction} onChange={set("construction")} /></Field>
       <Field label="Packing Type"><Select options={PRICE_LIST_PACKING} value={form.packingType} onChange={set("packingType")} /></Field>
@@ -341,12 +408,12 @@ function PriceListForm({ initial, categories, onSave, onCancel }) {
         <TextInput type="date" value={form.listDate} onChange={set("listDate")} />
       </Field>
 
-      <Field label="Width (inch)"><TextInput value={form.width} onChange={set("width")} placeholder="e.g. 58" /></Field>
+      <Field label="Width (inch)"><TextInput value={form.width} onChange={onChangeWidth} placeholder="e.g. 58" /></Field>
 
       <div className="sm:col-span-2 grid grid-cols-3 gap-3">
-        <Field label="GLM"><TextInput type="number" value={form.glm} onChange={set("glm")} placeholder="g/linear m" /></Field>
-        <Field label="GSM"><TextInput type="number" value={form.gsm} onChange={set("gsm")} placeholder="g/m²" /></Field>
-        <Field label="OZ"><TextInput type="number" value={form.oz} onChange={set("oz")} placeholder="oz/yd²" /></Field>
+        <Field label="GLM"><TextInput type="number" value={form.glm} onChange={setWeight("glm")} placeholder="g/linear m" /></Field>
+        <Field label="GSM"><TextInput type="number" value={form.gsm} onChange={setWeight("gsm")} placeholder="g/m²" /></Field>
+        <Field label="OZ"><TextInput type="number" value={form.oz} onChange={setWeight("oz")} placeholder="oz/yd²" /></Field>
       </div>
 
       <Field label="RFD Rate (₹)"><TextInput type="number" value={form.rfdRate} onChange={setRate("rfdRate")} /></Field>
