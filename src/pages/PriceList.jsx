@@ -63,6 +63,17 @@ function naturalCompare(a = "", b = "") {
   return 0;
 }
 
+// Rounds a stored weight value for display only (doesn't touch what's
+// saved) — whole numbers for GSM/GLM, one decimal for OZ, per trade
+// convention. Leaves non-numeric text (e.g. an imported "7.0 OZ" cell
+// that already has its unit baked into the string) exactly as stored.
+function displayWeight(value, decimals) {
+  if (!value) return null;
+  const n = Number(value);
+  if (isNaN(n)) return value;
+  return n.toFixed(decimals);
+}
+
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -276,7 +287,7 @@ export default function PriceList() {
                 <td className="px-4 py-3 text-muted">{i.millName || "—"}</td>
                 <td className="px-4 py-3 text-muted">{i.width || "—"}</td>
                 <td className="px-4 py-3 text-muted">{i.construction || "—"}</td>
-                <td className="px-4 py-3 text-muted text-xs">{[i.glm, i.gsm, i.oz].filter(Boolean).join(" / ") || "—"}</td>
+                <td className="px-4 py-3 text-muted text-xs">{[displayWeight(i.glm, 0), displayWeight(i.gsm, 0), displayWeight(i.oz, 1)].filter(Boolean).join(" / ") || "—"}</td>
                 <td className="px-4 py-3 text-muted">{i.packingType || "—"}</td>
                 <td className="px-4 py-3 font-semibold">{i.rfdRate ? `₹${formatCurrency(i.rfdRate, 2)}` : "—"}</td>
                 <td className="px-4 py-3 font-semibold">{i.dyedRate ? `₹${formatCurrency(i.dyedRate, 2)}` : "—"}</td>
