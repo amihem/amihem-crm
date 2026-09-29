@@ -39,10 +39,6 @@ export function computeFabricWeights(value, unit, widthInches) {
   return {
     gsm: Math.round(gsm),
     glm: glm === null ? null : Math.round(glm),
-    oz: round1(oz),
+    oz: Math.round(oz),
   };
-}
-
-function round1(n) {
-  return Math.round(n * 10) / 10;
 }
