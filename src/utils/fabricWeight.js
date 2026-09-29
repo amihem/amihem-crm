@@ -16,8 +16,9 @@ export function widthInchesToMetres(widthInches) {
 }
 
 // Given one known weight value + its unit + width, returns { gsm, glm, oz }
-// all as numbers rounded to 2 decimals, or null for any that can't be
-// computed (e.g. GLM/OZ need width, GSM alone doesn't).
+// rounded to the trade convention — GSM and GLM as whole numbers, OZ to
+// one decimal — or null for any that can't be computed (e.g. GLM/OZ need
+// width, GSM alone doesn't).
 export function computeFabricWeights(value, unit, widthInches) {
   const v = parseFloat(value);
   if (isNaN(v)) return { gsm: null, glm: null, oz: null };
@@ -36,12 +37,12 @@ export function computeFabricWeights(value, unit, widthInches) {
   const oz = gsm * OZ_PER_GSM;
 
   return {
-    gsm: round2(gsm),
-    glm: glm === null ? null : round2(glm),
-    oz: round2(oz),
+    gsm: Math.round(gsm),
+    glm: glm === null ? null : Math.round(glm),
+    oz: round1(oz),
   };
 }
 
-function round2(n) {
-  return Math.round(n * 100) / 100;
+function round1(n) {
+  return Math.round(n * 10) / 10;
 }
