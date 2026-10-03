@@ -10,26 +10,26 @@ import NetworkStatus from "./NetworkStatus.jsx";
 // MasterTabs.jsx for the sub-tab switcher rendered inside those pages.
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/customers", label: "Masters", icon: Users, matchAlso: ["/products"] },
+  { to: "/outstanding", label: "Outstanding", icon: Wallet },
   { to: "/tickets", label: "Samples", icon: FileText },
   { to: "/analytics", label: "Analytics", icon: LineChart },
   { to: "/inventory", label: "Inventory", icon: Package },
   { to: "/price-list", label: "Price List", icon: Tags },
   { to: "/reports", label: "Reports", icon: FileBarChart },
-  { to: "/outstanding", label: "Outstanding", icon: Wallet },
+  { to: "/customers", label: "Masters", icon: Users, matchAlso: ["/products"] },
 ];
 
-// Mobile bottom nav — Dashboard, Samples, Price List, Masters are the
-// daily-use slots; everything else lives in the "More" sheet.
+// Mobile bottom nav — Dashboard, Samples, Price List, Outstanding are the
+// daily-use slots; everything else (incl. Masters) lives in the "More" sheet.
 const MOBILE_NAV = [NAV[0], NAV[2], NAV[5], NAV[1]];
-const MORE_NAV = [NAV[3], NAV[4], NAV[6], NAV[7]]; // Analytics, Inventory, Reports, Outstanding
+const MORE_NAV = [NAV[3], NAV[4], NAV[6], NAV[7]]; // Analytics, Inventory, Reports, Masters
 
 export default function AppShell() {
   const { session, permissions, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { pathname } = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
-  const moreActive = MORE_NAV.some((n) => pathname === n.to);
+  const moreActive = MORE_NAV.some((n) => pathname === n.to || (n.matchAlso || []).includes(pathname));
 
   return (
     <div className="min-h-screen flex flex-col">
