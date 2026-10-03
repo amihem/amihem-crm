@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, FileText, LineChart, Package, FileBarChart, Tags, Settings as SettingsIcon, LogOut, Sun, Moon, MoreHorizontal, X } from "lucide-react";
+import { LayoutDashboard, Users, FileText, LineChart, Package, FileBarChart, Tags, Wallet, Settings as SettingsIcon, LogOut, Sun, Moon, MoreHorizontal, X } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useTheme } from "../context/ThemeContext.jsx";
 import OverdueReminderPopup from "./OverdueReminderPopup.jsx";
@@ -16,12 +16,13 @@ const NAV = [
   { to: "/inventory", label: "Inventory", icon: Package },
   { to: "/price-list", label: "Price List", icon: Tags },
   { to: "/reports", label: "Reports", icon: FileBarChart },
+  { to: "/outstanding", label: "Outstanding", icon: Wallet },
 ];
 
 // Mobile bottom nav — Dashboard, Samples, Price List, Masters are the
 // daily-use slots; everything else lives in the "More" sheet.
 const MOBILE_NAV = [NAV[0], NAV[2], NAV[5], NAV[1]];
-const MORE_NAV = [NAV[3], NAV[4], NAV[6]]; // Analytics, Inventory, Reports
+const MORE_NAV = [NAV[3], NAV[4], NAV[6], NAV[7]]; // Analytics, Inventory, Reports, Outstanding
 
 export default function AppShell() {
   const { session, permissions, logout } = useAuth();
