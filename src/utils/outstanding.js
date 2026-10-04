@@ -340,3 +340,27 @@ export function exportExcel(filename, sheetName, rows, columns) {
   XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
   XLSX.writeFile(wb, filename);
 }
+
+// ---------- compact INR (₹75.71L / ₹1.20Cr) for dense mobile views ----------
+export function compactINR(n, symbol = true) {
+  const v = Math.abs(Number(n) || 0);
+  const sign = n < 0 ? "-" : "";
+  const c = symbol ? "₹" : "";
+  if (v >= 1e7) return `${sign}${c}${(v / 1e7).toFixed(2)}Cr`;
+  if (v >= 1e5) return `${sign}${c}${(v / 1e5).toFixed(2)}L`;
+  if (v >= 1e3) return `${sign}${c}${(v / 1e3).toFixed(1)}K`;
+  return `${sign}${c}${Math.round(v)}`;
+}
+
+// Owner-side summary (to share/copy), not for customers.
+export function summaryMessage(rows, totals, asOn, creditDays) {
+  const company = getCompanyName();
+  const top = rows.filter((r) => r.overdue > 0).sort((a, b) => b.overdue - a.overdue).slice(0, 10);
+  const L = [
+    `*${company} — Outstanding Summary*`, `As on ${fmtDate(asOn)}`, "",
+    `Net outstanding: ${rs(totals.net)}`, `Overdue (> ${creditDays}d): ${rs(totals.overdue)}`, "",
+    "*Ageing*", ...BUCKETS.map((b) => `${b.label} days: ${rs(totals.buckets[b.key])}`),
+  ];
+  if (top.length) L.push("", "*Top overdue*", ...top.map((r, i) => `${i + 1}. ${r.g.name} — ${rs(r.overdue)}`));
+  return L.join("\n");
+}
