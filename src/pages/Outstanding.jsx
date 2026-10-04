@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Upload, MessageCircle, Phone, Search, Link2, Download, AlertTriangle,
-  CheckCircle2, Wallet, Users, Clock, Settings2, FileText, Send,
+  CheckCircle2, Wallet, Users, Clock, Settings2, FileText, Send, Share2,
 } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from "recharts";
 import { useCustomers } from "../context/domains.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 import Modal from "../components/Modal.jsx";
@@ -15,7 +15,7 @@ import {
   BUCKETS, bucketOf, fmtDate, groupParties, overdueAmount, matchParty, resolvePhone,
   buildStatementMessage, parseOutstandingFile, exportExcel,
   loadSnapshot, saveSnapshot, loadLinks, saveLinks, loadSent, saveSent,
-  loadSettings, saveSettings, DEFAULT_FOOTER,
+  loadSettings, saveSettings, DEFAULT_FOOTER, compactINR, summaryMessage,
 } from "../utils/outstanding";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
@@ -50,6 +50,7 @@ export default function Outstanding() {
   const [queue, setQueue] = useState(null); // [{key,name,phone,message}]
   const [linking, setLinking] = useState(null); // group being linked
   const [showSettings, setShowSettings] = useState(false);
+  const [detailKey, setDetailKey] = useState(null);
 
   const groups = useMemo(() => (snap ? groupParties(snap.bills) : []), [snap]);
   const rows = useMemo(
@@ -70,6 +71,12 @@ export default function Outstanding() {
     });
     return t;
   }, [rows]);
+
+  const shareSummary = async () => {
+    const text = summaryMessage(rows, totals, snap.asOn, settings.creditDays);
+    if (navigator.share) { try { await navigator.share({ text }); } catch { /* cancelled */ } return; }
+    try { await navigator.clipboard.writeText(text); showToast("Summary copied"); } catch { showToast("Couldn't copy", "error"); }
+  };
 
   // ---------- upload ----------
   const handleFile = async (file) => {
@@ -142,7 +149,7 @@ export default function Outstanding() {
   return (
     <div className="flex flex-col gap-5">
       <Header>
-        <span className="text-xs text-muted hidden sm:block">As on <b className="text-ink">{fmtDate(snap.asOn)}</b> · {snap.fileName}</span>
+        <button onClick={shareSummary} className="p-2 rounded-lg border border-line hover:bg-paper" aria-label="Share summary"><Share2 size={16} /></button>
         <button onClick={() => setShowSettings(true)} className="p-2 rounded-lg border border-line hover:bg-paper" aria-label="Settings"><Settings2 size={16} /></button>
         <button onClick={() => fileRef.current?.click()} disabled={busy} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-ink2 transition flex items-center gap-2 disabled:opacity-50">
           <Upload size={15} /> {busy ? "Reading…" : "Upload new"}
@@ -150,10 +157,12 @@ export default function Outstanding() {
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
       </Header>
 
+      <div className="text-xs text-muted -mt-3">As on <b className="text-ink">{fmtDate(snap.asOn)}</b> · {snap.fileName}</div>
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <KpiCard label="Net Outstanding" value={inr(totals.net)} icon={Wallet} sub={`${groups.length} parties`} />
-        <KpiCard label={`Overdue > ${settings.creditDays}d`} value={inr(totals.overdue)} tone="rust" icon={AlertTriangle} sub={`${totals.due ? Math.round((totals.overdue / totals.due) * 100) : 0}% of dues`} />
-        <KpiCard label="Advance / Credit" value={inr(totals.advance)} tone="loom" icon={CheckCircle2} sub="adjusted in net" />
+        <KpiCard label="Net Outstanding" value={compactINR(totals.net)} icon={Wallet} sub={`${inr(totals.net)} · ${groups.length} parties`} />
+        <KpiCard label={`Overdue > ${settings.creditDays}d`} value={compactINR(totals.overdue)} tone="rust" icon={AlertTriangle} sub={`${totals.due ? Math.round((totals.overdue / totals.due) * 100) : 0}% of dues`} />
+        <KpiCard label="Advance / Credit" value={compactINR(totals.advance)} tone="loom" icon={CheckCircle2} sub="adjusted in net" />
         <KpiCard label="Not linked to master" value={unmatched} tone={unmatched ? "thread" : "loom"} icon={Users} sub={unmatched ? "link before sending" : "all matched"} />
       </div>
 
@@ -167,14 +176,19 @@ export default function Outstanding() {
       </div>
 
       {tab === "statements" && (
-        <StatementsTab rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
+        <StatementsTab onOpen={setDetailKey} rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
           onLink={setLinking} onConfirm={(r) => updateLink(r.g.key, { ...(r.link || {}), customerId: r.match.customer.id })}
           showToast={showToast} />
       )}
-      {tab === "summary" && <SummaryTab rows={rows} totals={totals} snap={snap} />}
+      {tab === "summary" && <SummaryTab rows={rows} totals={totals} snap={snap} onOpen={setDetailKey} />}
       {tab === "bills" && <BillsTab snap={snap} />}
-      {tab === "priority" && <PriorityTab rows={rows} settings={settings} startQueue={startQueue} />}
+      {tab === "priority" && <PriorityTab rows={rows} settings={settings} startQueue={startQueue} onOpen={setDetailKey} />}
 
+      {detailKey && rows.find((r) => r.g.key === detailKey) && (
+        <PartyDetail row={rows.find((r) => r.g.key === detailKey)} settings={settings} snap={snap}
+          onClose={() => setDetailKey(null)}
+          onSend={(r, o) => { setDetailKey(null); startQueue([r], o); }} />
+      )}
       {queue && <SendModal queue={queue} onSent={markSent} onClose={() => setQueue(null)} />}
       {linking && (
         <LinkModal group={linking} customers={customers} link={links[linking.key]}
@@ -199,15 +213,16 @@ function Header({ children }) {
 }
 
 // ---------------- Tab 1: statements ----------------
-function StatementsTab({ rows, sent, settings, snap, startQueue, onLink, onConfirm, showToast }) {
+function StatementsTab({ onOpen, rows, sent, settings, snap, startQueue, onLink, onConfirm, showToast }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
   const [sel, setSel] = useState(new Set());
   const [onlyOverdue, setOnlyOverdue] = useState(false);
   const [showAgeing, setShowAgeing] = useState(false);
+  const [sort, setSort] = useState("amount");
 
   const eligible = (r) => r.match.status === "auto" && r.phone && r.g.total > 0;
-  const list = rows.filter((r) => {
+  const list0 = rows.filter((r) => {
     if (q && !r.g.name.toLowerCase().includes(q.toLowerCase())) return false;
     if (filter === "pending") return r.g.total > 0 && !sent[r.g.key];
     if (filter === "link") return r.match.status !== "auto" || !r.phone;
@@ -215,6 +230,8 @@ function StatementsTab({ rows, sent, settings, snap, startQueue, onLink, onConfi
     if (filter === "advance") return r.g.total < 0;
     return true;
   });
+  const list = [...list0].sort((a, b) =>
+    sort === "name" ? a.g.name.localeCompare(b.g.name) : sort === "oldest" ? b.g.oldest - a.g.oldest : sort === "overdue" ? b.overdue - a.overdue : b.g.total - a.g.total);
   const toggle = (key) => setSel((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const selectable = list.filter(eligible);
   const chosen = rows.filter((r) => sel.has(r.g.key) && eligible(r));
@@ -239,6 +256,9 @@ function StatementsTab({ rows, sent, settings, snap, startQueue, onLink, onConfi
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search party…" className="border border-line rounded-lg pl-9 pr-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
         </div>
+        <select value={sort} onChange={(e) => setSort(e.target.value)} className="border border-line rounded-lg px-2 py-2 text-xs font-semibold bg-white outline-none">
+          <option value="amount">Sort: Amount</option><option value="overdue">Sort: Overdue</option><option value="oldest">Sort: Oldest bill</option><option value="name">Sort: Name</option>
+        </select>
         {[["all", "All"], ["pending", "Not sent"], ["overdue", `Overdue`], ["link", "Needs link/phone"], ["advance", "Advance"]].map(([id, label]) => (
           <button key={id} onClick={() => setFilter(id)} className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${filter === id ? "bg-ink text-white border-ink" : "border-line hover:bg-paper"}`}>{label}</button>
         ))}
@@ -263,7 +283,7 @@ function StatementsTab({ rows, sent, settings, snap, startQueue, onLink, onConfi
               <input type="checkbox" disabled={!ok} checked={sel.has(r.g.key)} onChange={() => toggle(r.g.key)} className="w-4 h-4" />
               <div className="flex-1 min-w-[180px]">
                 <div className="font-semibold text-sm flex items-center gap-2 flex-wrap">
-                  {r.g.name}
+                  <button onClick={() => onOpen(r.g.key)} className="text-left hover:underline">{r.g.name}</button>
                   {sent[r.g.key] && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Sent</span>}
                   {r.g.total < 0 && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Advance</span>}
                 </div>
@@ -277,6 +297,7 @@ function StatementsTab({ rows, sent, settings, snap, startQueue, onLink, onConfi
                   {r.match.status === "none" && <span className="text-rust font-semibold">Not in master</span>}
                   {" · "}{r.g.bills.length} bill{r.g.bills.length > 1 ? "s" : ""}
                 </div>
+                <AgeBar g={r.g} className="mt-2 max-w-[220px]" />
               </div>
               <div className="text-right">
                 <div className={`font-display font-bold ${r.g.total < 0 ? "text-loom" : ""}`}>{inr(r.g.total)}</div>
@@ -299,9 +320,17 @@ function StatementsTab({ rows, sent, settings, snap, startQueue, onLink, onConfi
 }
 
 // ---------------- Tab 2: ageing summary ----------------
-function SummaryTab({ rows, totals, snap }) {
+function SummaryTab({ rows, totals, snap, onOpen }) {
+  const [sort, setSort] = useState({ key: "total", dir: -1 });
   const data = BUCKETS.map((b) => ({ name: b.label, value: totals.buckets[b.key], color: b.color }));
-  const sorted = [...rows].sort((a, b) => b.g.total - a.g.total);
+  const dueSum = data.reduce((s, d) => s + d.value, 0) || 1;
+  const val = (g, k) => (k === "name" ? g.name : k === "total" ? g.total : k === "advance" ? g.advance : g.buckets[k]);
+  const sorted = [...rows].sort((a, b) => {
+    const x = val(a.g, sort.key), y = val(b.g, sort.key);
+    return (typeof x === "string" ? x.localeCompare(y) : x - y) * sort.dir;
+  });
+  const colMax = Object.fromEntries(BUCKETS.map((b) => [b.key, Math.max(1, ...rows.map((r) => r.g.buckets[b.key]))]));
+  const heat = (v, b) => (v ? { background: `${b.color}${Math.round(18 + 50 * (v / colMax[b.key])).toString(16).padStart(2, "0")}` } : undefined);
 
   const exportRows = () => sorted.map(({ g }) => ({
     party: g.name, ...Object.fromEntries(BUCKETS.map((b) => [b.key, g.buckets[b.key]])), advance: g.advance ? -g.advance : 0, total: g.total,
@@ -312,53 +341,76 @@ function SummaryTab({ rows, totals, snap }) {
     const { downloadBlob } = await import("../utils/helpers");
     downloadBlob("Ageing_Summary.pdf", await buildPDF(`Ageing Summary as on ${fmtDate(snap.asOn)}`, fmt, cols));
   };
+  const th = (key, label, color, cls = "text-right px-3") => (
+    <th onClick={() => setSort((s) => ({ key, dir: s.key === key ? -s.dir : -1 }))} style={color ? { color } : undefined}
+      className={`${cls} py-3 cursor-pointer select-none whitespace-nowrap`}>{label}{sort.key === key ? (sort.dir === -1 ? " ↓" : " ↑") : ""}</th>
+  );
 
   return (
     <div className="flex flex-col gap-4">
       <div className="bg-panel border border-line rounded-2xl p-4">
-        <div className="text-xs font-medium text-muted uppercase tracking-wide mb-2">Outstanding by ageing</div>
-        <div className="h-48">
+        <div className="text-xs font-medium text-muted uppercase tracking-wide mb-3">Outstanding by ageing</div>
+        <div className="flex h-3 rounded-full overflow-hidden bg-paper">
+          {data.map((d) => d.value > 0 && <div key={d.name} style={{ width: `${(d.value / dueSum) * 100}%`, background: d.color }} />)}
+        </div>
+        <div className="grid grid-cols-5 gap-1 mt-3">
+          {data.map((d) => (
+            <div key={d.name} className="text-center">
+              <div className="text-[10px] font-semibold" style={{ color: d.color }}>{d.name}</div>
+              <div className="text-xs font-bold">{compactINR(d.value, false)}</div>
+              <div className="text-[10px] text-muted">{Math.round((d.value / dueSum) * 100)}%</div>
+            </div>
+          ))}
+        </div>
+        <div className="h-44 mt-3">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
+            <BarChart data={data} margin={{ left: 0, right: 8, top: 18 }}>
               <XAxis dataKey="name" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11 }} width={52} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v / 100000).toFixed(0)}L`} />
+              <YAxis hide />
               <Tooltip formatter={(v) => inr(v)} cursor={{ fill: "rgba(0,0,0,0.04)" }} />
-              <Bar dataKey="value" radius={[6, 6, 0, 0]}>{data.map((d) => <Cell key={d.name} fill={d.color} />)}</Bar>
+              <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                {data.map((d) => <Cell key={d.name} fill={d.color} />)}
+                <LabelList dataKey="value" position="top" formatter={(v) => compactINR(v, false)} style={{ fontSize: 11, fontWeight: 600 }} />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
       </div>
       <ExportBar onExcel={() => exportExcel(`Ageing_Summary_${snap.asOn}.xlsx`, "Ageing Summary", exportRows(), cols)} onPdf={pdf} />
       <div className="bg-panel border border-line rounded-2xl overflow-x-auto">
-        <table className="w-full text-sm min-w-[720px]">
+        <table className="w-full text-sm min-w-[640px]">
           <thead>
             <tr className="text-xs text-muted uppercase tracking-wide border-b border-line">
-              <th className="text-left px-4 py-3">Party</th>
-              {BUCKETS.map((b) => <th key={b.key} className="text-right px-3 py-3" style={{ color: b.color }}>{b.label}</th>)}
-              <th className="text-right px-3 py-3">Advance</th>
-              <th className="text-right px-4 py-3">Net</th>
+              {th("name", "Party", null, "text-left px-3 sticky left-0 bg-panel z-10")}
+              {BUCKETS.map((b) => th(b.key, b.label, b.color))}
+              {th("advance", "Adv")}
+              {th("total", "Net", null, "text-right px-4")}
             </tr>
           </thead>
           <tbody>
             {sorted.map(({ g }) => (
-              <tr key={g.key} className="border-b border-line last:border-0">
-                <td className="px-4 py-2.5 font-medium">{g.name}</td>
-                {BUCKETS.map((b) => <td key={b.key} className={`text-right px-3 ${g.buckets[b.key] ? "" : "text-muted/50"}`}>{g.buckets[b.key] ? formatCurrency(g.buckets[b.key]) : "–"}</td>)}
-                <td className="text-right px-3 text-loom">{g.advance ? `-${formatCurrency(g.advance)}` : "–"}</td>
-                <td className="text-right px-4 font-semibold">{formatCurrency(g.total)}</td>
+              <tr key={g.key} onClick={() => onOpen(g.key)} className="border-b border-line last:border-0 cursor-pointer hover:bg-paper/60">
+                <td className="px-3 py-2.5 font-medium sticky left-0 bg-panel z-10 max-w-[150px] truncate">{g.name}</td>
+                {BUCKETS.map((b) => (
+                  <td key={b.key} style={heat(g.buckets[b.key], b)} title={g.buckets[b.key] ? inr(g.buckets[b.key]) : ""}
+                    className={`text-right px-3 whitespace-nowrap ${g.buckets[b.key] ? "" : "text-muted/40"}`}>{g.buckets[b.key] ? compactINR(g.buckets[b.key], false) : "–"}</td>
+                ))}
+                <td className="text-right px-3 text-loom whitespace-nowrap">{g.advance ? `-${compactINR(g.advance, false)}` : "–"}</td>
+                <td className="text-right px-4 font-semibold whitespace-nowrap">{compactINR(g.total, false)}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr className="font-bold border-t-2 border-line bg-paper/60">
-              <td className="px-4 py-3">Total</td>
-              {BUCKETS.map((b) => <td key={b.key} className="text-right px-3">{formatCurrency(totals.buckets[b.key])}</td>)}
-              <td className="text-right px-3 text-loom">-{formatCurrency(totals.advance)}</td>
-              <td className="text-right px-4">{formatCurrency(totals.net)}</td>
+              <td className="px-3 py-3 sticky left-0 bg-paper z-10">Total</td>
+              {BUCKETS.map((b) => <td key={b.key} className="text-right px-3 whitespace-nowrap">{compactINR(totals.buckets[b.key], false)}</td>)}
+              <td className="text-right px-3 text-loom whitespace-nowrap">-{compactINR(totals.advance, false)}</td>
+              <td className="text-right px-4 whitespace-nowrap">{compactINR(totals.net, false)}</td>
             </tr>
           </tfoot>
         </table>
       </div>
+      <p className="text-[11px] text-muted text-center">Amounts in ₹ (L = lakh, Cr = crore). Tap a party for bill details.</p>
     </div>
   );
 }
@@ -440,7 +492,7 @@ function BillsTab({ snap }) {
 }
 
 // ---------------- Tab 4: collection priority ----------------
-function PriorityTab({ rows, settings, startQueue }) {
+function PriorityTab({ rows, settings, startQueue, onOpen }) {
   const list = rows.filter((r) => r.overdue > 0).sort((a, b) => b.overdue - a.overdue);
   const max = list[0]?.overdue || 1;
   const sendable = list.filter((r) => r.match.status === "auto" && r.phone);
@@ -459,7 +511,7 @@ function PriorityTab({ rows, settings, startQueue }) {
           <div className="flex items-center gap-3 flex-wrap">
             <span className="w-7 h-7 rounded-full bg-ink/10 text-ink text-xs font-bold flex items-center justify-center shrink-0">{i + 1}</span>
             <div className="flex-1 min-w-[160px]">
-              <div className="font-semibold text-sm">{r.g.name}</div>
+              <button onClick={() => onOpen(r.g.key)} className="font-semibold text-sm text-left hover:underline">{r.g.name}</button>
               <div className="text-xs text-muted flex items-center gap-2 mt-0.5">Oldest bill <DaysBadge days={r.g.oldest} /> · Total dues {inr(r.g.due)}</div>
             </div>
             <div className="text-right">
@@ -476,6 +528,63 @@ function PriorityTab({ rows, settings, startQueue }) {
       ))}
       {!list.length && <div className="text-center text-sm text-muted py-10 flex flex-col items-center gap-2"><Clock size={22} />No overdue bills 🎉</div>}
     </div>
+  );
+}
+
+function AgeBar({ g, className = "" }) {
+  if (!g.due) return null;
+  return (
+    <div className={`flex h-1.5 rounded-full overflow-hidden bg-paper ${className}`}>
+      {BUCKETS.map((b) => g.buckets[b.key] > 0 && (
+        <div key={b.key} title={`${b.label}d: ${inr(g.buckets[b.key])}`} style={{ width: `${(g.buckets[b.key] / g.due) * 100}%`, background: b.color }} />
+      ))}
+    </div>
+  );
+}
+
+function PartyDetail({ row, settings, snap, onClose, onSend }) {
+  const { g } = row;
+  const canSend = row.match.status === "auto" && row.phone && g.total > 0;
+  const bills = [...g.bills].sort((a, b) => a.date.localeCompare(b.date));
+  return (
+    <Modal open onClose={onClose} title={g.name} wide>
+      <div className="flex flex-col gap-4">
+        <div className="flex items-end justify-between gap-3 flex-wrap">
+          <div>
+            <div className="text-xs text-muted">Net outstanding · as on {fmtDate(snap.asOn)}</div>
+            <div className={`font-display font-extrabold text-2xl ${g.total < 0 ? "text-loom" : ""}`}>{inr(g.total)}</div>
+            {g.advance > 0 && <div className="text-xs text-loom">incl. advance {inr(g.advance)}</div>}
+          </div>
+          <div className="text-xs text-muted text-right">{row.phone || "No phone"}{row.overdue > 0 && <div className="text-rust font-semibold">{inr(row.overdue)} overdue &gt; {settings.creditDays}d</div>}</div>
+        </div>
+        <AgeBar g={g} />
+        <div className="flex flex-wrap gap-1.5">
+          {BUCKETS.filter((b) => g.buckets[b.key] > 0).map((b) => (
+            <span key={b.key} className="text-[11px] font-semibold px-2 py-1 rounded-full" style={{ background: `${b.color}1F`, color: b.color }}>{b.label}d · {compactINR(g.buckets[b.key])}</span>
+          ))}
+        </div>
+        <div className="border border-line rounded-xl overflow-x-auto max-h-64 overflow-y-auto">
+          <table className="w-full text-sm min-w-[360px]">
+            <thead><tr className="text-xs text-muted uppercase tracking-wide border-b border-line"><th className="text-left px-3 py-2">Bill</th><th className="text-left px-3">Date</th><th className="text-right px-3">Outstanding</th><th className="text-right px-3">Days</th></tr></thead>
+            <tbody>
+              {bills.map((b, i) => (
+                <tr key={i} className="border-b border-line last:border-0">
+                  <td className="px-3 py-2 font-medium">{b.billNo}</td>
+                  <td className="px-3 whitespace-nowrap">{fmtDate(b.date)}</td>
+                  <td className={`px-3 text-right font-semibold ${b.outstanding < 0 ? "text-loom" : ""}`}>{formatCurrency(b.outstanding)}</td>
+                  <td className="px-3 text-right">{b.outstanding > 0 ? <DaysBadge days={b.days} /> : "–"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex gap-2 justify-end flex-wrap">
+          {row.phone && <a href={`tel:${row.phone}`} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper flex items-center gap-2"><Phone size={14} /> Call</a>}
+          {row.overdue > 0 && <button disabled={!canSend} onClick={() => onSend(row, { onlyOverdue: true })} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper disabled:opacity-40">Overdue only</button>}
+          <button disabled={!canSend} onClick={() => onSend(row, {})} className="bg-loom text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 disabled:opacity-40"><MessageCircle size={14} /> WhatsApp statement</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
