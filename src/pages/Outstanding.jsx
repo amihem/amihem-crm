@@ -10,7 +10,11 @@ import Modal from "../components/Modal.jsx";
 import KpiCard from "../components/KpiCard.jsx";
 import SearchDropdown from "../components/SearchDropdown.jsx";
 import { buildWhatsAppLink } from "../services/whatsapp";
-import { buildPDF, shareOrDownloadPDF, formatCurrency } from "../utils/helpers";
+import { buildPDF, formatCurrency } from "../utils/helpers";
+import {
+  renderStatementCanvas, canvasToBlob, canvasToPdfBlob, statementCaption, statementFileName,
+  shareStatementFile, downloadBlob as saveBlob,
+} from "../utils/statementImage";
 import {
   BUCKETS, bucketOf, fmtDate, groupParties, overdueAmount, matchParty, resolvePhone,
   buildStatementMessage, parseOutstandingFile, exportExcel,
@@ -51,6 +55,7 @@ export default function Outstanding() {
   const [linking, setLinking] = useState(null); // group being linked
   const [showSettings, setShowSettings] = useState(false);
   const [detailKey, setDetailKey] = useState(null);
+  const [stmtKey, setStmtKey] = useState(null);
 
   const groups = useMemo(() => (snap ? groupParties(snap.bills) : []), [snap]);
   const rows = useMemo(
@@ -176,7 +181,7 @@ export default function Outstanding() {
       </div>
 
       {tab === "statements" && (
-        <StatementsTab onOpen={setDetailKey} rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
+        <StatementsTab onStatement={setStmtKey} onOpen={setDetailKey} rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
           onLink={setLinking} onConfirm={(r) => updateLink(r.g.key, { ...(r.link || {}), customerId: r.match.customer.id })}
           showToast={showToast} />
       )}
@@ -187,7 +192,11 @@ export default function Outstanding() {
       {detailKey && rows.find((r) => r.g.key === detailKey) && (
         <PartyDetail row={rows.find((r) => r.g.key === detailKey)} settings={settings} snap={snap}
           onClose={() => setDetailKey(null)}
+          onStatement={(r) => { setDetailKey(null); setStmtKey(r.g.key); }}
           onSend={(r, o) => { setDetailKey(null); startQueue([r], o); }} />
+      )}
+      {stmtKey && rows.find((r) => r.g.key === stmtKey) && (
+        <StatementModal row={rows.find((r) => r.g.key === stmtKey)} snap={snap} settings={settings} onClose={() => setStmtKey(null)} showToast={showToast} />
       )}
       {queue && <SendModal queue={queue} onSent={markSent} onClose={() => setQueue(null)} />}
       {linking && (
@@ -213,7 +222,7 @@ function Header({ children }) {
 }
 
 // ---------------- Tab 1: statements ----------------
-function StatementsTab({ onOpen, rows, sent, settings, snap, startQueue, onLink, onConfirm, showToast }) {
+function StatementsTab({ onStatement, onOpen, rows, sent, settings, snap, startQueue, onLink, onConfirm, showToast }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
   const [sel, setSel] = useState(new Set());
@@ -236,18 +245,6 @@ function StatementsTab({ onOpen, rows, sent, settings, snap, startQueue, onLink,
   const selectable = list.filter(eligible);
   const chosen = rows.filter((r) => sel.has(r.g.key) && eligible(r));
   const opts = { onlyOverdue, showAgeing };
-
-  const sendPdf = async (r) => {
-    const bills = r.g.bills.filter((b) => b.outstanding > 0).sort((a, b) => a.date.localeCompare(b.date));
-    const data = bills.map((b) => ({ date: fmtDate(b.date), billNo: b.billNo, amount: formatCurrency(b.amount), outstanding: formatCurrency(b.outstanding), days: b.days }));
-    data.push({ date: "", billNo: "TOTAL", amount: "", outstanding: formatCurrency(r.g.total), days: "" });
-    const blob = await buildPDF(`Outstanding — ${r.g.name} (as on ${fmtDate(snap.asOn)})`, data, [
-      { key: "date", label: "Bill Date" }, { key: "billNo", label: "Bill No" }, { key: "amount", label: "Bill Amount" },
-      { key: "outstanding", label: "Outstanding" }, { key: "days", label: "Days" },
-    ]);
-    const res = await shareOrDownloadPDF(`Outstanding_${r.g.name.replace(/\W+/g, "_")}.pdf`, blob, r.phone);
-    showToast(res === "shared" ? "Shared" : "PDF downloaded — attach it in WhatsApp", "info");
-  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -275,6 +272,12 @@ function StatementsTab({ onOpen, rows, sent, settings, snap, startQueue, onLink,
         </button>
       </div>
 
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
+        <span className="font-semibold">Bill ageing:</span>
+        {BUCKETS.map((b) => <span key={b.key} className="flex items-center gap-1"><i className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: b.color }} />{b.label}d</span>)}
+        <span className="ml-auto">Bar length = bill amount</span>
+      </div>
+
       <div className="flex flex-col gap-2">
         {list.map((r) => {
           const ok = eligible(r);
@@ -297,7 +300,6 @@ function StatementsTab({ onOpen, rows, sent, settings, snap, startQueue, onLink,
                   {r.match.status === "none" && <span className="text-rust font-semibold">Not in master</span>}
                   {" · "}{r.g.bills.length} bill{r.g.bills.length > 1 ? "s" : ""}
                 </div>
-                <AgeBar g={r.g} className="mt-2 max-w-[220px]" />
               </div>
               <div className="text-right">
                 <div className={`font-display font-bold ${r.g.total < 0 ? "text-loom" : ""}`}>{inr(r.g.total)}</div>
@@ -307,9 +309,10 @@ function StatementsTab({ onOpen, rows, sent, settings, snap, startQueue, onLink,
                 {(r.match.status !== "auto" || !r.phone) && (
                   <button onClick={() => onLink(r.g)} className="p-2 rounded-lg border border-line hover:bg-paper text-ink2" aria-label="Link customer / phone"><Link2 size={15} /></button>
                 )}
-                <button disabled={!r.phone || r.g.total <= 0} onClick={() => sendPdf(r)} className="p-2 rounded-lg border border-line hover:bg-paper disabled:opacity-30" aria-label="PDF"><FileText size={15} /></button>
+                <button disabled={r.g.bills.length === 0} onClick={() => onStatement(r.g.key)} className="p-2 rounded-lg border border-line hover:bg-paper disabled:opacity-30" aria-label="Statement PDF / Image"><FileText size={15} /></button>
                 <button disabled={!ok} onClick={() => startQueue([r], opts)} className="p-2 rounded-lg bg-loom text-white disabled:opacity-30" aria-label="WhatsApp"><MessageCircle size={15} /></button>
               </div>
+              <BillBars g={r.g} />
             </div>
           );
         })}
@@ -531,6 +534,85 @@ function PriorityTab({ rows, settings, startQueue, onOpen }) {
   );
 }
 
+function BillBars({ g, limit = 3 }) {
+  const [all, setAll] = useState(false);
+  const bills = [...g.bills].sort((a, b) => a.date.localeCompare(b.date));
+  if (!bills.length) return null;
+  const max = Math.max(1, ...bills.map((b) => Math.abs(b.outstanding)));
+  const shown = all ? bills : bills.slice(0, limit);
+  return (
+    <div className="basis-full w-full flex flex-col gap-1.5 pt-2 border-t border-line/70">
+      {shown.map((b, i) => {
+        const neg = b.outstanding < 0;
+        const color = neg ? "#2F6E5D" : bucketOf(b.days).color;
+        return (
+          <div key={i} className="flex items-center gap-2 text-[11px]" title={`${neg ? "Advance" : "Bill " + b.billNo} · ${fmtDate(b.date)} · ${inr(b.outstanding)}`}>
+            <div className="w-[84px] shrink-0 leading-tight">
+              <div className="font-semibold truncate">{neg ? "Advance" : b.billNo}</div>
+              <div className="text-muted">{fmtDate(b.date).replace(/-(\d{2})(\d{2})$/, "-$2")}</div>
+            </div>
+            <div className="flex-1 h-3 rounded-full bg-paper overflow-hidden">
+              <div className="h-full rounded-full" style={{ width: `${Math.max(5, (Math.abs(b.outstanding) / max) * 100)}%`, background: color }} />
+            </div>
+            <div className={`w-[70px] text-right font-semibold ${neg ? "text-loom" : ""}`}>{compactINR(b.outstanding)}</div>
+            <div className="w-[44px] text-center">{neg ? <span className="text-loom font-semibold">Adv</span> : <DaysBadge days={b.days} />}</div>
+          </div>
+        );
+      })}
+      {bills.length > limit && (
+        <button onClick={() => setAll(!all)} className="text-[11px] font-semibold text-ink2 text-left hover:underline">
+          {all ? "Show fewer" : `Show all ${bills.length} bills`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function StatementModal({ row, snap, settings, onClose, showToast }) {
+  const { g } = row;
+  const [files, setFiles] = useState(null);
+  useEffect(() => {
+    let url;
+    let dead = false;
+    (async () => {
+      try {
+        const canvas = renderStatementCanvas(g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer });
+        const [png, pdf] = await Promise.all([canvasToBlob(canvas), canvasToPdfBlob(canvas)]);
+        url = URL.createObjectURL(png);
+        if (!dead) setFiles({ png, pdf, url });
+      } catch (e) {
+        showToast("Couldn't build the statement.", "error");
+      }
+    })();
+    return () => { dead = true; if (url) URL.revokeObjectURL(url); };
+  }, [g, snap.asOn, settings.creditDays, settings.footer]);
+
+  const caption = statementCaption(g, snap.asOn);
+  const send = async (kind) => {
+    const blob = kind === "png" ? files.png : files.pdf;
+    const res = await shareStatementFile(blob, statementFileName(g, kind), row.phone, caption);
+    if (res === "downloaded") showToast(row.phone ? "Saved — attach it in the WhatsApp chat that opened" : "Saved to your device", "info");
+  };
+  const btn = "px-3 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40";
+
+  return (
+    <Modal open onClose={onClose} title={`Statement — ${g.name}`} wide>
+      <div className="flex flex-col gap-3">
+        <div className="border border-line rounded-xl bg-paper overflow-auto max-h-[58vh]">
+          {files ? <img src={files.url} alt="Statement preview" className="w-full block" /> : <div className="py-16 text-center text-sm text-muted">Preparing statement…</div>}
+        </div>
+        {!row.phone && <p className="text-xs text-thread font-semibold">No phone linked — you can still share via the share sheet or download.</p>}
+        <div className="grid grid-cols-2 gap-2">
+          <button disabled={!files} onClick={() => send("png")} className={`${btn} bg-loom text-white`}><MessageCircle size={15} /> WhatsApp · Image</button>
+          <button disabled={!files} onClick={() => send("pdf")} className={`${btn} bg-loom text-white`}><MessageCircle size={15} /> WhatsApp · PDF</button>
+          <button disabled={!files} onClick={() => saveBlob(statementFileName(g, "png"), files.png)} className={`${btn} border border-line hover:bg-paper`}><Download size={15} /> Save Image</button>
+          <button disabled={!files} onClick={() => saveBlob(statementFileName(g, "pdf"), files.pdf)} className={`${btn} border border-line hover:bg-paper`}><Download size={15} /> Save PDF</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function AgeBar({ g, className = "" }) {
   if (!g.due) return null;
   return (
@@ -542,7 +624,7 @@ function AgeBar({ g, className = "" }) {
   );
 }
 
-function PartyDetail({ row, settings, snap, onClose, onSend }) {
+function PartyDetail({ row, settings, snap, onClose, onSend, onStatement }) {
   const { g } = row;
   const canSend = row.match.status === "auto" && row.phone && g.total > 0;
   const bills = [...g.bills].sort((a, b) => a.date.localeCompare(b.date));
@@ -580,6 +662,7 @@ function PartyDetail({ row, settings, snap, onClose, onSend }) {
         </div>
         <div className="flex gap-2 justify-end flex-wrap">
           {row.phone && <a href={`tel:${row.phone}`} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper flex items-center gap-2"><Phone size={14} /> Call</a>}
+          <button onClick={() => onStatement(row)} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper flex items-center gap-2"><FileText size={14} /> Statement (PDF / Image)</button>
           {row.overdue > 0 && <button disabled={!canSend} onClick={() => onSend(row, { onlyOverdue: true })} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper disabled:opacity-40">Overdue only</button>}
           <button disabled={!canSend} onClick={() => onSend(row, {})} className="bg-loom text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 disabled:opacity-40"><MessageCircle size={14} /> WhatsApp statement</button>
         </div>
