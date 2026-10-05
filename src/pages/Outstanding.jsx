@@ -10,7 +10,7 @@ import Modal from "../components/Modal.jsx";
 import KpiCard from "../components/KpiCard.jsx";
 import SearchDropdown from "../components/SearchDropdown.jsx";
 import { buildWhatsAppLink } from "../services/whatsapp";
-import { buildPDF, formatCurrency } from "../utils/helpers";
+import { buildPDF, formatCurrency, downloadBlob } from "../utils/helpers";
 import {
   renderStatementCanvas, canvasToBlob, canvasToPdfBlob, statementCaption, statementFileName,
   shareStatementFile, downloadBlob as saveBlob,
@@ -341,7 +341,6 @@ function SummaryTab({ rows, totals, snap, onOpen }) {
   const cols = [{ key: "party", label: "Party" }, ...BUCKETS.map((b) => ({ key: b.key, label: `${b.label} days` })), { key: "advance", label: "Advance" }, { key: "total", label: "Net Total" }];
   const pdf = async () => {
     const fmt = exportRows().map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === "number" ? formatCurrency(v) : v])));
-    const { downloadBlob } = await import("../utils/helpers");
     downloadBlob("Ageing_Summary.pdf", await buildPDF(`Ageing Summary as on ${fmtDate(snap.asOn)}`, fmt, cols));
   };
   const th = (key, label, color, cls = "text-right px-3") => (
@@ -462,8 +461,7 @@ function BillsTab({ snap }) {
       <ExportBar
         onExcel={() => exportExcel(`Billwise_Ageing_${snap.asOn}.xlsx`, "Bill-wise", list.map((b) => ({ ...b, date: fmtDate(b.date), days: b.days })), cols)}
         onPdf={async () => {
-          const { downloadBlob } = await import("../utils/helpers");
-          downloadBlob("Billwise_Ageing.pdf", await buildPDF(`Bill-wise Ageing as on ${fmtDate(snap.asOn)}`, list.map((b) => ({ ...b, date: fmtDate(b.date), amount: formatCurrency(b.amount), credit: formatCurrency(b.credit), outstanding: formatCurrency(b.outstanding) })), cols));
+                downloadBlob("Billwise_Ageing.pdf", await buildPDF(`Bill-wise Ageing as on ${fmtDate(snap.asOn)}`, list.map((b) => ({ ...b, date: fmtDate(b.date), amount: formatCurrency(b.amount), credit: formatCurrency(b.credit), outstanding: formatCurrency(b.outstanding) })), cols));
         }}
       />
       <div className="bg-panel border border-line rounded-2xl overflow-x-auto">
@@ -672,10 +670,14 @@ function PartyDetail({ row, settings, snap, onClose, onSend, onStatement }) {
 }
 
 function ExportBar({ onExcel, onPdf }) {
+  const showToast = useToast();
+  const run = (fn) => async () => {
+    try { await fn(); } catch (e) { showToast("Export failed — please try again.", "error"); }
+  };
   return (
     <div className="flex gap-2 justify-end">
-      <button onClick={onExcel} className="px-3 py-1.5 rounded-lg border border-line text-xs font-semibold hover:bg-paper flex items-center gap-1.5"><Download size={13} /> Excel</button>
-      <button onClick={onPdf} className="px-3 py-1.5 rounded-lg border border-line text-xs font-semibold hover:bg-paper flex items-center gap-1.5"><Download size={13} /> PDF</button>
+      <button onClick={run(onExcel)} className="px-3 py-1.5 rounded-lg border border-line text-xs font-semibold hover:bg-paper flex items-center gap-1.5"><Download size={13} /> Excel</button>
+      <button onClick={run(onPdf)} className="px-3 py-1.5 rounded-lg border border-line text-xs font-semibold hover:bg-paper flex items-center gap-1.5"><Download size={13} /> PDF</button>
     </div>
   );
 }

@@ -72,22 +72,24 @@ export function downloadCSV(filename, csvContent) {
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 // Builds a simple table PDF and returns it as a Blob — used for both
 // download and Web Share (WhatsApp) below.
 export async function buildPDF(title, rows, columns) {
   const { jsPDF } = await import("jspdf");
-  await import("jspdf-autotable");
+  const { default: autoTable } = await import("jspdf-autotable");
   const doc = new jsPDF();
   doc.setFontSize(14);
   doc.text(title, 14, 16);
   doc.setFontSize(9);
   doc.setTextColor(120);
   doc.text(`Generated ${new Date().toLocaleDateString("en-IN")} — Amihem CRM`, 14, 22);
-  doc.autoTable({
+  autoTable(doc, {
     startY: 28,
     head: [columns.map((c) => c.label)],
     body: rows.map((row) => columns.map((c) => String(row[c.key] ?? ""))),
@@ -102,8 +104,10 @@ export function downloadBlob(filename, blob) {
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 // Tries the native share sheet (works on most mobile browsers, lets the
