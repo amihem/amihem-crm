@@ -6,6 +6,8 @@ import {
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from "recharts";
 import { useCustomers } from "../context/domains.jsx";
 import { useToast } from "../context/ToastContext.jsx";
+import { isSupabaseConfigured } from "../services/supabaseClient";
+import { pullState, pushState, isSetupError } from "../services/outstandingSync";
 import Modal from "../components/Modal.jsx";
 import KpiCard from "../components/KpiCard.jsx";
 import SearchDropdown from "../components/SearchDropdown.jsx";
@@ -56,6 +58,49 @@ export default function Outstanding() {
   const [showSettings, setShowSettings] = useState(false);
   const [detailKey, setDetailKey] = useState(null);
   const [stmtKey, setStmtKey] = useState(null);
+  const [sync, setSync] = useState(isSupabaseConfigured ? "syncing" : "off");
+
+  const pushCloud = (patch) => {
+    if (!isSupabaseConfigured) return;
+    setSync("syncing");
+    pushState(patch).then(() => setSync("ok")).catch((e) => setSync(isSetupError(e) ? "setup" : "error"));
+  };
+
+  // Cloud is the source of truth; localStorage is just the instant cache.
+  // First device to open this after setup uploads what it already has.
+  useEffect(() => {
+    if (!isSupabaseConfigured) return undefined;
+    let dead = false;
+    const pull = async () => {
+      try {
+        const remote = await pullState();
+        if (dead) return;
+        const local = loadSnapshot();
+        const all = () => ({ snapshot: local, links: loadLinks(), sent: loadSent(), settings: loadSettings() });
+        if (!remote) {
+          if (local) await pushState(all());
+          if (!dead) setSync("ok");
+          return;
+        }
+        if (local && (local.uploadedAt || "") > (remote.snapshot?.uploadedAt || "")) {
+          await pushState(all());
+          if (!dead) setSync("ok");
+          return;
+        }
+        if (remote.snapshot) { saveSnapshot(remote.snapshot); setSnap(remote.snapshot); }
+        saveLinks(remote.links || {}); setLinks(remote.links || {});
+        saveSent(remote.sent || {}); setSent(remote.sent || {});
+        saveSettings(remote.settings || {}); setSettings(loadSettings());
+        setSync("ok");
+      } catch (e) {
+        if (!dead) setSync(isSetupError(e) ? "setup" : "error");
+      }
+    };
+    pull();
+    const onVis = () => { if (document.visibilityState === "visible") pull(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { dead = true; document.removeEventListener("visibilitychange", onVis); };
+  }, []);
 
   const groups = useMemo(() => (snap ? groupParties(snap.bills) : []), [snap]);
   const rows = useMemo(
@@ -92,6 +137,7 @@ export default function Outstanding() {
       if (!saveSnapshot(parsed)) showToast("Loaded, but couldn't be saved on this device (storage full).", "error");
       saveSent({}); setSent({});
       setSnap(parsed);
+      pushCloud({ snapshot: parsed, sent: {} });
       showToast(`${parsed.bills.length} bills · ${groupParties(parsed.bills).length} parties loaded (as on ${fmtDate(parsed.asOn)})`);
     } catch (err) {
       showToast(err.message || "Couldn't read that file.", "error");
@@ -104,13 +150,13 @@ export default function Outstanding() {
   const updateLink = (key, link) => {
     const next = { ...links };
     if (link) next[key] = link; else delete next[key];
-    setLinks(next); saveLinks(next);
+    setLinks(next); saveLinks(next); pushCloud({ links: next });
   };
   const markSent = (key) => {
     const next = { ...sent, [key]: new Date().toISOString() };
-    setSent(next); saveSent(next);
+    setSent(next); saveSent(next); pushCloud({ sent: next });
   };
-  const updateSettings = (s) => { setSettings(s); saveSettings(s); };
+  const updateSettings = (s) => { setSettings(s); saveSettings(s); pushCloud({ settings: s }); };
 
   const startQueue = (list, opts) => {
     const items = list
@@ -129,6 +175,7 @@ export default function Outstanding() {
     return (
       <div className="flex flex-col gap-5">
         <Header />
+        <div className="text-xs -mt-3"><SyncBadge sync={sync} /></div>
         <div
           onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
           onDragLeave={() => setDrag(false)}
@@ -162,7 +209,7 @@ export default function Outstanding() {
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
       </Header>
 
-      <div className="text-xs text-muted -mt-3">As on <b className="text-ink">{fmtDate(snap.asOn)}</b> · {snap.fileName}</div>
+      <div className="text-xs text-muted -mt-3">As on <b className="text-ink">{fmtDate(snap.asOn)}</b> · {snap.fileName} · <SyncBadge sync={sync} /></div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KpiCard label="Net Outstanding" value={compactINR(totals.net)} icon={Wallet} sub={`${inr(totals.net)} · ${groups.length} parties`} />
@@ -207,6 +254,17 @@ export default function Outstanding() {
       <SettingsModal open={showSettings} settings={settings} onSave={(s) => { updateSettings(s); setShowSettings(false); }} onClose={() => setShowSettings(false)} />
     </div>
   );
+}
+
+function SyncBadge({ sync }) {
+  const m = {
+    syncing: ["Syncing…", "text-muted"],
+    ok: ["☁ Synced across devices", "text-loom"],
+    off: ["Saved on this device only", "text-muted"],
+    error: ["Sync failed — retry by reopening", "text-rust"],
+    setup: ["Cloud sync not set up — run supabase/outstanding.sql", "text-thread"],
+  }[sync];
+  return <span className={`font-semibold ${m[1]}`}>{m[0]}</span>;
 }
 
 function Header({ children }) {
