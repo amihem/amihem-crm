@@ -46,15 +46,29 @@ function write(key, value) {
   }
 }
 
-export const loadSnapshot = () => read(K_SNAP, null);
-export const saveSnapshot = (s) => write(K_SNAP, s);
-export const loadLinks = () => read(K_LINKS, {});
-export const saveLinks = (l) => write(K_LINKS, l);
-export const loadSent = () => read(K_SENT, {});
-export const saveSent = (s) => write(K_SENT, s);
+// Navkar keeps the original keys (so existing data survives); other
+// sources get a suffix.
+const kk = (base, source) => (!source || source === "navkar" ? base : `${base}__${source}`);
+export const loadSnapshot = (source) => read(kk(K_SNAP, source), null);
+export const saveSnapshot = (s, source) => write(kk(K_SNAP, source), s);
+export const loadLinks = (source) => read(kk(K_LINKS, source), {});
+export const saveLinks = (l, source) => write(kk(K_LINKS, source), l);
+export const loadSent = (source) => read(kk(K_SENT, source), {});
+export const saveSent = (s, source) => write(kk(K_SENT, source), s);
 export const DEFAULT_FOOTER = "Kindly arrange the payment at the earliest. Please ignore if already paid.";
-export const loadSettings = () => ({ creditDays: 60, footer: DEFAULT_FOOTER, ...read(K_SET, {}) });
-export const saveSettings = (s) => write(K_SET, s);
+export const loadSettings = (source) => ({ creditDays: 60, footer: DEFAULT_FOOTER, ...read(kk(K_SET, source), {}) });
+export const saveSettings = (s, source) => write(kk(K_SET, source), s);
+
+// ---------- sources (one outstanding report per company ledger) ----------
+export const SOURCES = [
+  { id: "navkar", label: "Navkar Fabrics", accept: ".xlsx,.xls,.csv,.pdf", hint: "Party Wise Outstanding — Excel / CSV / PDF with Bill Date, Bill No, Bill Amount, Credit Amount, Outstanding, Ageing Days." },
+  { id: "ranjan", label: "Ranjan Fabrics", accept: ".pdf,.xlsx,.xls,.csv", hint: "Agent Outstanding With Party Eject report (PDF or Excel) from Ranjan Fabrics Pvt. Ltd." },
+];
+const titleCase = (t) => (t === t.toUpperCase() ? t.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()) : t);
+export function companyFor(source, snap) {
+  if (source === "ranjan") return titleCase(snap?.company || "Ranjan Fabrics Pvt. Ltd.");
+  return getCompanyName();
+}
 
 // ---------- dates ----------
 const pad = (n) => String(n).padStart(2, "0");
@@ -204,11 +218,99 @@ export function parseRows(rows, fileName = "") {
   return { asOn, fileName, uploadedAt: new Date().toISOString(), bills, skipped };
 }
 
-export async function parseOutstandingFile(file) {
+const MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const NUM = /^-?\d+(\.\d+)?$/;
+
+// "Agent Outstanding With Party Eject" layout (Ranjan Fabrics). Works on text
+// lines, so the same code reads the PDF and an Excel/CSV export of it.
+// Per bill row: Bill No, Date, [Due Days], Debit, Credit, Balance, Late Days, Run Balance.
+// Balance = outstanding, Late Days = ageing.
+export function parseRanjanLines(lines, fileName = "") {
+  let asOn = null;
+  let company = null;
+  let party = null;
+  const bills = [];
+  let skipped = 0;
+
+  for (const raw of lines) {
+    const line = String(raw).replace(/\s+/g, " ").trim();
+    if (!line) continue;
+
+    const mUp = line.match(/UP-?TO\s+(\d{1,2})\/([A-Za-z]{3})[A-Za-z]*\/(\d{4})/i);
+    if (mUp && !asOn) {
+      const mo = MON[mUp[2].toLowerCase()];
+      if (mo) asOn = iso(+mUp[3], mo, +mUp[1]);
+    }
+    if (!company && /\b(PVT|LTD|LIMITED|LLP)\b/i.test(line) && !/^party\b/i.test(line) && !/^agent\b/i.test(line)) company = line.replace(/\s*\|.*$/, "").trim();
+
+    if (/^party total|^ledger balance|^agent ?total|^agent\b|^bill no\.?|^page \d|outs?anding with party|^from \d|^days\b|^debit\b/i.test(line)) continue;
+    if (/^\d{1,2}\/[A-Za-z]{3}\/\d{4}\b/.test(line)) continue; // print date/time stamp
+
+    const mp = line.match(/^party\s+(.+)$/i);
+    if (mp) {
+      const rest = mp[1];
+      const comma = rest.indexOf(",");
+      party = (comma > 0 ? rest.slice(0, comma) : rest.replace(/\s*Ph\.?:.*$/i, "")).trim();
+      continue;
+    }
+
+    const mb = line.match(/^(\S+)\s+(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(.*)$/);
+    if (!mb || !party) continue;
+    const t = mb[5].split(" ").filter(Boolean);
+    if (t.length < 3 || !t.every((x) => NUM.test(x))) { skipped++; continue; }
+    const balance = Number(t[t.length - 3]);
+    const days = Math.max(0, Math.round(Number(t[t.length - 2])));
+    let rem = t.slice(0, -3);
+    if (rem.length > 2 || (rem.length === 2 && rem.some((x) => !x.includes(".")) && rem.some((x) => x.includes(".")))) {
+      const dec = rem.filter((x) => x.includes("."));
+      if (dec.length) rem = dec;
+    }
+    let debit = 0;
+    let credit = 0;
+    if (rem.length >= 2) { debit = Number(rem[0]); credit = Number(rem[1]); }
+    else if (rem.length === 1) { if (balance < 0) credit = Number(rem[0]); else debit = Number(rem[0]); }
+    if (!balance) continue;
+    const y = +mb[4] < 100 ? +mb[4] + 2000 : +mb[4];
+    bills.push({ party, date: iso(y, +mb[3], +mb[2]), billNo: mb[1], amount: debit, credit, outstanding: balance, days });
+  }
+
+  if (!bills.length) {
+    throw new Error("No bills found. Expected the “Agent Outstanding With Party Eject” report (Party / Bill No / Date / Debit / Credit / Balance / Late Days).");
+  }
+  return { asOn: asOn || todayIso(), company, fileName, uploadedAt: new Date().toISOString(), bills, skipped };
+}
+
+// Excel/CSV rows -> one text line per row (dates written dd/mm/yy)
+function rowsToLines(rows) {
+  return rows.map((r) =>
+    r.map((c) => {
+      if (c instanceof Date) { const x = new Date(c.getTime() + 12 * 36e5); return `${pad(x.getDate())}/${pad(x.getMonth() + 1)}/${String(x.getFullYear()).slice(2)}`; }
+      return c === "" || c == null ? "" : String(c).trim();
+    }).filter(Boolean).join(" ")
+  );
+}
+
+export async function parseOutstandingFile(file, source = "navkar") {
   const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: "array", cellDates: true });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+  const isPdf = /\.pdf$/i.test(file.name) || file.type === "application/pdf";
+  let lines;
+  let rows;
+  if (isPdf) {
+    const { pdfToLines } = await import("./pdfLines");
+    lines = await pdfToLines(buf);
+  } else {
+    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+    lines = rowsToLines(rows);
+  }
+  if (source === "ranjan") return parseRanjanLines(lines, file.name);
+  if (isPdf) {
+    // Party-wise PDF: one row per text line; the header line is skipped (default column order applies)
+    rows = lines
+      .filter((l) => !(/bill\s*date/i.test(l) && /outstanding/i.test(l)))
+      .map((l) => (/^party\s*:/i.test(l) ? [l] : l.split(/\s+/)));
+  }
   return parseRows(rows, file.name);
 }
 
@@ -217,6 +319,7 @@ const STOP = new Set(["PVT", "LTD", "LLP", "PRIVATE", "LIMITED", "CO", "AND", "T
 export function normName(s) {
   return String(s || "")
     .toUpperCase()
+    .replace(/\([^)]*\)/g, " ") // agent tags like "(RAJEEV)" are not part of the name
     .replace(/&/g, " AND ")
     .replace(/[^A-Z0-9 ]/g, " ")
     .split(/\s+/)
@@ -300,8 +403,7 @@ export const resolvePhone = (match, link) => link?.phone || match.customer?.phon
 const rs = (n) => `₹${formatCurrency(n)}`;
 
 export function buildStatementMessage(group, asOn, opts = {}) {
-  const { creditDays = 60, onlyOverdue = false, showAgeing = false, footer = DEFAULT_FOOTER } = opts;
-  const company = getCompanyName();
+  const { creditDays = 60, onlyOverdue = false, showAgeing = false, footer = DEFAULT_FOOTER, company = getCompanyName() } = opts;
   let bills = group.bills.filter((b) => b.outstanding > 0);
   if (onlyOverdue) bills = bills.filter((b) => b.days > creditDays);
   bills = [...bills].sort((a, b) => a.date.localeCompare(b.date));
@@ -353,8 +455,7 @@ export function compactINR(n, symbol = true) {
 }
 
 // Owner-side summary (to share/copy), not for customers.
-export function summaryMessage(rows, totals, asOn, creditDays) {
-  const company = getCompanyName();
+export function summaryMessage(rows, totals, asOn, creditDays, company = getCompanyName()) {
   const top = rows.filter((r) => r.overdue > 0).sort((a, b) => b.overdue - a.overdue).slice(0, 10);
   const L = [
     `*${company} — Outstanding Summary*`, `As on ${fmtDate(asOn)}`, "",

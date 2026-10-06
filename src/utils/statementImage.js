@@ -50,8 +50,7 @@ function wrap(ctx, text, maxW, size) {
   return out.filter((l) => l !== "" || out.length > 1);
 }
 
-export function renderStatementCanvas(group, asOn, { creditDays = 60, footer = "" } = {}) {
-  const company = getCompanyName();
+export function renderStatementCanvas(group, asOn, { creditDays = 60, footer = "", company = getCompanyName() } = {}) {
   const bills = [...group.bills].sort((a, b) => a.date.localeCompare(b.date));
   const n = bills.length;
   const maxAmt = Math.max(1, ...bills.map((b) => Math.abs(b.outstanding)));
@@ -137,7 +136,7 @@ export function renderStatementCanvas(group, asOn, { creditDays = 60, footer = "
     const cy = tableTop + i * ROW + ROW / 2;
     const neg = b.outstanding < 0;
     const color = neg ? GREEN : bucketOf(b.days).color;
-    T(ctx, neg ? "Advance / Credit" : `Bill ${b.billNo}`, 48, cy - 4, { size: 26, weight: 700, color: NAVY });
+    T(ctx, neg ? (b.billNo && !/advance/i.test(b.billNo) ? `Credit · ${b.billNo}` : "Advance / Credit") : `Bill ${b.billNo}`, 48, cy - 4, { size: 26, weight: 700, color: NAVY });
     const sub = `${short(b.date)}${b.credit > 0 && b.amount > 0 ? ` · rcvd ${rs(b.credit)}` : ""}`;
     T(ctx, sub, 48, cy + 24, { size: 18, color: GRAY });
     rr(ctx, BX, cy - 11, BW, 22, 11, "#EEF0F3");
@@ -172,8 +171,8 @@ export async function canvasToPdfBlob(canvas) {
   return pdf.output("blob");
 }
 
-export const statementCaption = (group, asOn) =>
-  `Dear ${group.name},\nPlease find your outstanding statement as on ${fmtDate(asOn)}.\nNet outstanding: ${rs(group.total)}\n\nRegards\n${getCompanyName()}`;
+export const statementCaption = (group, asOn, company = getCompanyName()) =>
+  `Dear ${group.name},\nPlease find your outstanding statement as on ${fmtDate(asOn)}.\nNet outstanding: ${rs(group.total)}\n\nRegards\n${company}`;
 
 export const statementFileName = (group, ext) => `Statement_${group.name.replace(/\W+/g, "_")}.${ext}`;
 
