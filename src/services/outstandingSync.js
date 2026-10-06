@@ -13,24 +13,25 @@ async function userId() {
 }
 
 export const isSetupError = (e) =>
-  e?.code === "42P01" || e?.code === "PGRST205" || /does not exist|schema cache/i.test(e?.message || "");
+  e?.code === "42P01" || e?.code === "42703" || e?.code === "PGRST205" || e?.code === "PGRST204" || /does not exist|schema cache/i.test(e?.message || "");
 
-export async function pullState() {
+export async function pullState(source = "navkar") {
   if (!isSupabaseConfigured) return null;
   const id = await userId();
   if (!id) return null;
-  const { data, error } = await supabase.from(TABLE).select("*").eq("user_id", id).maybeSingle();
+  const { data, error } = await supabase.from(TABLE).select("*").eq("user_id", id).eq("source", source).maybeSingle();
   if (error) throw error;
   return data || null;
 }
 
+// One row per (user, source) — source is the company ledger, e.g. "navkar" / "ranjan".
 // patch may hold any of: snapshot, links, sent, settings (other columns are left untouched).
-export async function pushState(patch) {
+export async function pushState(source, patch) {
   if (!isSupabaseConfigured) return;
   const id = await userId();
   if (!id) return;
   const { error } = await supabase
     .from(TABLE)
-    .upsert({ user_id: id, ...patch, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+    .upsert({ user_id: id, source, ...patch, updated_at: new Date().toISOString() }, { onConflict: "user_id,source" });
   if (error) throw error;
 }
