@@ -21,7 +21,7 @@ import {
   BUCKETS, bucketOf, fmtDate, groupParties, overdueAmount, matchParty, resolvePhone,
   buildStatementMessage, parseOutstandingFile, exportExcel,
   loadSnapshot, saveSnapshot, loadLinks, saveLinks, loadSent, saveSent,
-  loadSettings, saveSettings, DEFAULT_FOOTER, compactINR, summaryMessage,
+  loadSettings, saveSettings, DEFAULT_FOOTER, compactINR, summaryMessage, SOURCES, companyFor,
 } from "../utils/outstanding";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
@@ -42,14 +42,48 @@ function DaysBadge({ days }) {
 }
 
 export default function Outstanding() {
+  const [source, setSource] = useState(() => {
+    try { return localStorage.getItem("amihem_crm_outstanding_source") || "navkar"; } catch { return "navkar"; }
+  });
+  const pick = (id) => {
+    setSource(id);
+    try { localStorage.setItem("amihem_crm_outstanding_source", id); } catch { /* ignore */ }
+  };
+  const [, bump] = useState(0);
+  const stat = (id) => {
+    const sn = loadSnapshot(id);
+    return sn ? { net: sn.bills.reduce((t, x) => t + x.outstanding, 0), asOn: sn.asOn } : null;
+  };
+  const bar = (
+    <div className="grid grid-cols-2 gap-2">
+      {SOURCES.map((c) => {
+        const st = stat(c.id);
+        const on = source === c.id;
+        return (
+          <button key={c.id} onClick={() => pick(c.id)}
+            className={`text-left rounded-xl border-2 px-4 py-3 transition ${on ? "border-ink bg-ink text-white" : "border-line bg-panel hover:border-ink2/40"}`}>
+            <div className="text-sm font-bold">{c.label}</div>
+            <div className={`text-xs mt-0.5 ${on ? "text-white/70" : "text-muted"}`}>
+              {st ? `${compactINR(st.net)} · ${fmtDate(st.asOn)}` : "No report yet"}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+  return <OutstandingSource key={source} source={source} sourceBar={bar} onUpdate={() => bump((n) => n + 1)} />;
+}
+
+function OutstandingSource({ source, sourceBar, onUpdate }) {
+  const cfg = SOURCES.find((c) => c.id === source) || SOURCES[0];
   const { items: customers } = useCustomers();
   const showToast = useToast();
   const fileRef = useRef(null);
 
-  const [snap, setSnap] = useState(() => loadSnapshot());
-  const [links, setLinks] = useState(() => loadLinks());
-  const [sent, setSent] = useState(() => loadSent());
-  const [settings, setSettings] = useState(() => loadSettings());
+  const [snap, setSnap] = useState(() => loadSnapshot(source));
+  const [links, setLinks] = useState(() => loadLinks(source));
+  const [sent, setSent] = useState(() => loadSent(source));
+  const [settings, setSettings] = useState(() => loadSettings(source));
   const [tab, setTab] = useState("statements");
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
@@ -58,12 +92,13 @@ export default function Outstanding() {
   const [showSettings, setShowSettings] = useState(false);
   const [detailKey, setDetailKey] = useState(null);
   const [stmtKey, setStmtKey] = useState(null);
+  const company = companyFor(source, snap);
   const [sync, setSync] = useState(isSupabaseConfigured ? "syncing" : "off");
 
   const pushCloud = (patch) => {
     if (!isSupabaseConfigured) return;
     setSync("syncing");
-    pushState(patch).then(() => setSync("ok")).catch((e) => setSync(isSetupError(e) ? "setup" : "error"));
+    pushState(source, patch).then(() => setSync("ok")).catch((e) => setSync(isSetupError(e) ? "setup" : "error"));
   };
 
   // Cloud is the source of truth; localStorage is just the instant cache.
@@ -73,24 +108,24 @@ export default function Outstanding() {
     let dead = false;
     const pull = async () => {
       try {
-        const remote = await pullState();
+        const remote = await pullState(source);
         if (dead) return;
-        const local = loadSnapshot();
-        const all = () => ({ snapshot: local, links: loadLinks(), sent: loadSent(), settings: loadSettings() });
+        const local = loadSnapshot(source);
+        const all = () => ({ snapshot: local, links: loadLinks(source), sent: loadSent(source), settings: loadSettings(source) });
         if (!remote) {
-          if (local) await pushState(all());
+          if (local) await pushState(source, all());
           if (!dead) setSync("ok");
           return;
         }
         if (local && (local.uploadedAt || "") > (remote.snapshot?.uploadedAt || "")) {
-          await pushState(all());
+          await pushState(source, all());
           if (!dead) setSync("ok");
           return;
         }
-        if (remote.snapshot) { saveSnapshot(remote.snapshot); setSnap(remote.snapshot); }
-        saveLinks(remote.links || {}); setLinks(remote.links || {});
-        saveSent(remote.sent || {}); setSent(remote.sent || {});
-        saveSettings(remote.settings || {}); setSettings(loadSettings());
+        if (remote.snapshot) { saveSnapshot(remote.snapshot, source); setSnap(remote.snapshot); onUpdate?.(); }
+        saveLinks(remote.links || {}, source); setLinks(remote.links || {});
+        saveSent(remote.sent || {}, source); setSent(remote.sent || {});
+        saveSettings(remote.settings || {}, source); setSettings(loadSettings(source));
         setSync("ok");
       } catch (e) {
         if (!dead) setSync(isSetupError(e) ? "setup" : "error");
@@ -123,7 +158,7 @@ export default function Outstanding() {
   }, [rows]);
 
   const shareSummary = async () => {
-    const text = summaryMessage(rows, totals, snap.asOn, settings.creditDays);
+    const text = summaryMessage(rows, totals, snap.asOn, settings.creditDays, company);
     if (navigator.share) { try { await navigator.share({ text }); } catch { /* cancelled */ } return; }
     try { await navigator.clipboard.writeText(text); showToast("Summary copied"); } catch { showToast("Couldn't copy", "error"); }
   };
@@ -133,10 +168,11 @@ export default function Outstanding() {
     if (!file) return;
     setBusy(true);
     try {
-      const parsed = await parseOutstandingFile(file);
-      if (!saveSnapshot(parsed)) showToast("Loaded, but couldn't be saved on this device (storage full).", "error");
-      saveSent({}); setSent({});
+      const parsed = await parseOutstandingFile(file, source);
+      if (!saveSnapshot(parsed, source)) showToast("Loaded, but couldn't be saved on this device (storage full).", "error");
+      saveSent({}, source); setSent({});
       setSnap(parsed);
+      onUpdate?.();
       pushCloud({ snapshot: parsed, sent: {} });
       showToast(`${parsed.bills.length} bills · ${groupParties(parsed.bills).length} parties loaded (as on ${fmtDate(parsed.asOn)})`);
     } catch (err) {
@@ -150,20 +186,20 @@ export default function Outstanding() {
   const updateLink = (key, link) => {
     const next = { ...links };
     if (link) next[key] = link; else delete next[key];
-    setLinks(next); saveLinks(next); pushCloud({ links: next });
+    setLinks(next); saveLinks(next, source); pushCloud({ links: next });
   };
   const markSent = (key) => {
     const next = { ...sent, [key]: new Date().toISOString() };
-    setSent(next); saveSent(next); pushCloud({ sent: next });
+    setSent(next); saveSent(next, source); pushCloud({ sent: next });
   };
-  const updateSettings = (s) => { setSettings(s); saveSettings(s); pushCloud({ settings: s }); };
+  const updateSettings = (s) => { setSettings(s); saveSettings(s, source); pushCloud({ settings: s }); };
 
   const startQueue = (list, opts) => {
     const items = list
       .filter((r) => r.phone)
       .map((r) => ({
         key: r.g.key, name: r.g.name, phone: r.phone,
-        message: buildStatementMessage(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, ...opts }),
+        message: buildStatementMessage(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, ...opts }),
       }));
     if (!items.length) { showToast("No phone number available for the selected parties.", "error"); return; }
     if (items.length < list.length) showToast(`${list.length - items.length} skipped — no phone number.`, "info");
@@ -174,6 +210,7 @@ export default function Outstanding() {
   if (!snap) {
     return (
       <div className="flex flex-col gap-5">
+        {sourceBar}
         <Header />
         <div className="text-xs -mt-3"><SyncBadge sync={sync} /></div>
         <div
@@ -183,14 +220,14 @@ export default function Outstanding() {
           className={`border-2 border-dashed rounded-2xl p-10 sm:p-16 text-center bg-panel transition ${drag ? "border-ink2 bg-ink2/5" : "border-line"}`}
         >
           <div className="w-14 h-14 rounded-2xl bg-ink/10 text-ink flex items-center justify-center mx-auto mb-4"><Upload size={26} /></div>
-          <h2 className="font-display font-bold text-lg">Upload party-wise outstanding</h2>
+          <h2 className="font-display font-bold text-lg">Upload {cfg.label} outstanding</h2>
           <p className="text-sm text-muted mt-1 max-w-md mx-auto">
-            Excel / CSV with Bill Date, Bill No, Bill Amount, Credit Amount, Outstanding, Ageing Days — grouped under “Party : NAME” rows, or as a flat sheet with a Party column.
+            {cfg.hint}
           </p>
           <button onClick={() => fileRef.current?.click()} disabled={busy} className="mt-5 bg-ink text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-ink2 transition disabled:opacity-50">
             {busy ? "Reading…" : "Choose file"}
           </button>
-          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
+          <input ref={fileRef} type="file" accept={cfg.accept} className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
         </div>
       </div>
     );
@@ -200,13 +237,14 @@ export default function Outstanding() {
 
   return (
     <div className="flex flex-col gap-5">
+      {sourceBar}
       <Header>
         <button onClick={shareSummary} className="p-2 rounded-lg border border-line hover:bg-paper" aria-label="Share summary"><Share2 size={16} /></button>
         <button onClick={() => setShowSettings(true)} className="p-2 rounded-lg border border-line hover:bg-paper" aria-label="Settings"><Settings2 size={16} /></button>
         <button onClick={() => fileRef.current?.click()} disabled={busy} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-ink2 transition flex items-center gap-2 disabled:opacity-50">
           <Upload size={15} /> {busy ? "Reading…" : "Upload new"}
         </button>
-        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
+        <input ref={fileRef} type="file" accept={cfg.accept} className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
       </Header>
 
       <div className="text-xs text-muted -mt-3">As on <b className="text-ink">{fmtDate(snap.asOn)}</b> · {snap.fileName} · <SyncBadge sync={sync} /></div>
@@ -243,7 +281,7 @@ export default function Outstanding() {
           onSend={(r, o) => { setDetailKey(null); startQueue([r], o); }} />
       )}
       {stmtKey && rows.find((r) => r.g.key === stmtKey) && (
-        <StatementModal row={rows.find((r) => r.g.key === stmtKey)} snap={snap} settings={settings} onClose={() => setStmtKey(null)} showToast={showToast} />
+        <StatementModal company={company} row={rows.find((r) => r.g.key === stmtKey)} snap={snap} settings={settings} onClose={() => setStmtKey(null)} showToast={showToast} />
       )}
       {queue && <SendModal queue={queue} onSent={markSent} onClose={() => setQueue(null)} />}
       {linking && (
@@ -624,7 +662,7 @@ function BillBars({ g, limit = 3 }) {
   );
 }
 
-function StatementModal({ row, snap, settings, onClose, showToast }) {
+function StatementModal({ company, row, snap, settings, onClose, showToast }) {
   const { g } = row;
   const [files, setFiles] = useState(null);
   useEffect(() => {
@@ -632,7 +670,7 @@ function StatementModal({ row, snap, settings, onClose, showToast }) {
     let dead = false;
     (async () => {
       try {
-        const canvas = renderStatementCanvas(g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer });
+        const canvas = renderStatementCanvas(g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company });
         const [png, pdf] = await Promise.all([canvasToBlob(canvas), canvasToPdfBlob(canvas)]);
         url = URL.createObjectURL(png);
         if (!dead) setFiles({ png, pdf, url });
@@ -641,9 +679,9 @@ function StatementModal({ row, snap, settings, onClose, showToast }) {
       }
     })();
     return () => { dead = true; if (url) URL.revokeObjectURL(url); };
-  }, [g, snap.asOn, settings.creditDays, settings.footer]);
+  }, [g, snap.asOn, settings.creditDays, settings.footer, company]);
 
-  const caption = statementCaption(g, snap.asOn);
+  const caption = statementCaption(g, snap.asOn, company);
   const send = async (kind) => {
     const blob = kind === "png" ? files.png : files.pdf;
     const res = await shareStatementFile(blob, statementFileName(g, kind), row.phone, caption);
