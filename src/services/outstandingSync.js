@@ -35,3 +35,16 @@ export async function pushState(source, patch) {
     .upsert({ user_id: id, source, ...patch, updated_at: new Date().toISOString() }, { onConflict: "user_id,source" });
   if (error) throw error;
 }
+
+// Upload a statement (PDF / image) to the "statements" storage bucket and return
+// a public link. The path contains a random id, so the link can't be guessed.
+export async function uploadStatement(blob, filename) {
+  if (!isSupabaseConfigured) throw new Error("Cloud storage is not configured");
+  const id = await userId();
+  if (!id) throw new Error("Please log in again");
+  const rand = (globalThis.crypto?.randomUUID?.() || `${Date.now()}${Math.random().toString(16).slice(2)}`);
+  const path = `${id}/${rand}/${filename.replace(/[^\w.-]+/g, "_")}`;
+  const { error } = await supabase.storage.from("statements").upload(path, blob, { contentType: blob.type, upsert: false });
+  if (error) throw error;
+  return supabase.storage.from("statements").getPublicUrl(path).data.publicUrl;
+}
