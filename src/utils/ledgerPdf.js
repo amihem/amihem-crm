@@ -36,12 +36,12 @@ export function buildLedgerPages(group, snap, o = {}) {
   const L = (x1, y1, x2, y2, lw = 1) => ({ t: "line", x1, y1, x2, y2, lw });
 
   // split rows across pages
-  const firstBase = (agent ? 120.95 : 104) ;
+  const bandH = agent ? 28.2 : 15;
+  const firstBase = 83.8 + bandH + 8.95; // first row sits just below the grey Party band
   const contBase = 90;
   const maxBase = 786;
   const pages = [];
   let idx = 0;
-  const bandH = agent ? 28.2 : 15;
   let first = true;
   do {
     const base = first ? firstBase : contBase;
@@ -157,14 +157,19 @@ export async function ledgerPdfBlob(pages, logoDataUrl) {
 }
 
 // ---- canvas (preview / image of one page) ----
-export async function ledgerPageCanvas(ops, logoDataUrl, scale = 2) {
+export async function ledgerPageCanvas(ops, logoDataUrl, scale = 2, fit = false) {
+  let H = PH;
+  if (fit) {
+    const low = Math.max(...ops.map((o) => (o.t === "text" ? o.y + 6 : o.t === "line" ? Math.max(o.y1, o.y2) : 0)));
+    H = Math.min(PH, Math.ceil(low + 18));
+  }
   const c = document.createElement("canvas");
   c.width = PW * scale;
-  c.height = PH * scale;
+  c.height = H * scale;
   const ctx = c.getContext("2d");
   ctx.scale(scale, scale);
   ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, PW, PH);
+  ctx.fillRect(0, 0, PW, H);
   let logo = null;
   if (logoDataUrl) {
     logo = await new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => res(null); im.src = logoDataUrl; });
@@ -172,10 +177,11 @@ export async function ledgerPageCanvas(ops, logoDataUrl, scale = 2) {
   const rgb = (a) => `rgb(${a[0]},${a[1]},${a[2]})`;
   ops.forEach((op) => {
     if (op.t === "rect") {
-      if (op.fill) { ctx.fillStyle = rgb(op.fill); ctx.fillRect(op.x, op.y, op.w, op.h); }
+      const h = fit && op.h > 800 ? H - op.y - 1 : op.h; // page frame follows the fitted height
+      if (op.fill) { ctx.fillStyle = rgb(op.fill); ctx.fillRect(op.x, op.y, op.w, h); }
       ctx.lineWidth = op.lw || 1;
       ctx.strokeStyle = rgb(op.stroke || [0, 0, 0]);
-      ctx.strokeRect(op.x, op.y, op.w, op.h);
+      ctx.strokeRect(op.x, op.y, op.w, h);
     } else if (op.t === "line") {
       ctx.lineWidth = op.lw || 1; ctx.strokeStyle = "#000";
       ctx.beginPath(); ctx.moveTo(op.x1, op.y1); ctx.lineTo(op.x2, op.y2); ctx.stroke();
