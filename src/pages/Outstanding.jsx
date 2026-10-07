@@ -7,7 +7,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelL
 import { useCustomers } from "../context/domains.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 import { isSupabaseConfigured } from "../services/supabaseClient";
-import { pullState, pushState, isSetupError } from "../services/outstandingSync";
+import { pullState, pushState, isSetupError, uploadStatement } from "../services/outstandingSync";
 import Modal from "../components/Modal.jsx";
 import { SummaryTab, BillsTab, MonthTab, PriorityTab } from "./outstandingReports.jsx";
 import KpiCard from "../components/KpiCard.jsx";
@@ -475,7 +475,7 @@ function StatementModal({ company, source, row, snap, settings, onClose, showToa
         const logo = ranjan ? RANJAN_LOGO : null;
         const pages = buildLedgerPages(g, snap, { format: ranjan ? "ranjan" : "generic", company, logo: !!logo });
         const [cardPng, cardPdf, ledPdf, ledCanvas] = await Promise.all([
-          canvasToBlob(card), canvasToPdfBlob(card), ledgerPdfBlob(pages, logo), ledgerPageCanvas(pages[0], logo, 2.2),
+          canvasToBlob(card), canvasToPdfBlob(card), ledgerPdfBlob(pages, logo), ledgerPageCanvas(pages[0], logo, 2.2, pages.length === 1),
         ]);
         const ledPng = await canvasToBlob(ledCanvas);
         const set = { card: { png: cardPng, pdf: cardPdf }, ledger: { png: ledPng, pdf: ledPdf } };
@@ -491,9 +491,26 @@ function StatementModal({ company, source, row, snap, settings, onClose, showToa
   const cur = files?.[fmt];
   const caption = statementCaption(g, snap.asOn, company);
   const base = (kind) => statementFileName(g, kind).replace("Statement_", fmt === "ledger" ? "Outstanding_" : "Statement_");
+  const [busy, setBusy] = useState(false);
+  // Share-sheet route: the file itself is attached, but WhatsApp asks you to pick the chat.
   const send = async (kind) => {
     const res = await shareStatementFile(cur[kind], base(kind), row.phone, caption);
     if (res === "downloaded") showToast(row.phone ? "Saved — attach it in the WhatsApp chat that opened" : "Saved to your device", "info");
+  };
+  // Link route: file is stored online and the customer's own chat opens with the link in the message.
+  const sendLink = async (kind) => {
+    if (!row.phone) { showToast("No phone number linked for this customer.", "error"); return; }
+    setBusy(true);
+    try {
+      const url = await uploadStatement(cur[kind], base(kind));
+      const text = `${caption}\n\n${kind === "pdf" ? "Statement (PDF)" : "Statement (Image)"}: ${url}`;
+      const link = buildWhatsAppLink(row.phone, text);
+      if (!window.open(link, "_blank")) window.location.href = link;
+    } catch (e) {
+      showToast("Couldn't create the link — run supabase/outstanding.sql once, then retry.", "error");
+    } finally {
+      setBusy(false);
+    }
   };
   const btn = "px-3 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40";
   const tab = (id, label) => (
@@ -512,11 +529,17 @@ function StatementModal({ company, source, row, snap, settings, onClose, showToa
         </div>
         {!row.phone && <p className="text-xs text-thread font-semibold">No phone linked — you can still share via the share sheet or download.</p>}
         <div className="grid grid-cols-2 gap-2">
-          <button disabled={!cur} onClick={() => send("pdf")} className={`${btn} bg-loom text-white`}><MessageCircle size={15} /> WhatsApp · PDF</button>
-          <button disabled={!cur} onClick={() => send("png")} className={`${btn} bg-loom text-white`}><MessageCircle size={15} /> WhatsApp · Image</button>
+          <button disabled={!cur || busy || !row.phone} onClick={() => sendLink("pdf")} className={`${btn} bg-loom text-white`}><MessageCircle size={15} /> {busy ? "Preparing…" : "Send PDF"}</button>
+          <button disabled={!cur || busy || !row.phone} onClick={() => sendLink("png")} className={`${btn} bg-loom text-white`}><MessageCircle size={15} /> {busy ? "Preparing…" : "Send Image"}</button>
           <button disabled={!cur} onClick={() => saveBlob(base("pdf"), cur.pdf)} className={`${btn} border border-line hover:bg-paper`}><Download size={15} /> Save PDF</button>
           <button disabled={!cur} onClick={() => saveBlob(base("png"), cur.png)} className={`${btn} border border-line hover:bg-paper`}><Download size={15} /> Save Image</button>
         </div>
+        <p className="text-[11px] text-muted leading-snug">
+          “Send” opens the customer's own WhatsApp chat{row.phone ? ` (${row.phone})` : ""} with a link to the {fmt === "ledger" ? "ledger" : "statement"} in the message.
+          Prefer to attach the file itself?{" "}
+          <button onClick={() => send("pdf")} className="font-semibold text-ink2 underline">Share PDF</button> ·{" "}
+          <button onClick={() => send("png")} className="font-semibold text-ink2 underline">Share Image</button>
+        </p>
       </div>
     </Modal>
   );
