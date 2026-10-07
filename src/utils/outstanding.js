@@ -231,6 +231,7 @@ export function parseRanjanLines(lines, fileName = "") {
   let party = null;
   const bills = [];
   let skipped = 0;
+  const meta = { parties: {} }; // header text of the original report, reused on the per-customer ledger PDF
 
   for (const raw of lines) {
     const line = String(raw).replace(/\s+/g, " ").trim();
@@ -243,6 +244,11 @@ export function parseRanjanLines(lines, fileName = "") {
     }
     if (!company && /\b(PVT|LTD|LIMITED|LLP)\b/i.test(line) && !/^party\b/i.test(line) && !/^agent\b/i.test(line)) company = line.replace(/\s*\|.*$/, "").trim();
 
+    if (!meta.period) { const mf = line.match(/FROM\s+\d{1,2}\/[A-Za-z]{3}\/\d{4}.*?UP-?TO\s+\d{1,2}\/[A-Za-z]{3}\/\d{4}/i); if (mf) meta.period = mf[0]; }
+    if (!meta.printed) { const mPr = line.match(/(\d{1,2}\/[A-Za-z]{3}\/\d{4})\s+(\d{1,2}:\d{2}:\d{2})/); if (mPr) meta.printed = `${mPr[1]} ${mPr[2]}`; }
+    const mAg = !meta.agent && line.match(/^agent\s+(?!out)(.+?)(?:\s+(\d[\d,]{8,}))?$/i);
+    if (mAg && !/^total/i.test(mAg[1]) && !/page/i.test(mAg[1])) { meta.agent = mAg[1].trim(); meta.agentPhones = (mAg[2] || "").replace(/\s+/g, ""); }
+
     if (/^party total|^ledger balance|^agent ?total|^agent\b|^bill no\.?|^page \d|outs?anding with party|^from \d|^days\b|^debit\b/i.test(line)) continue;
     if (/^\d{1,2}\/[A-Za-z]{3}\/\d{4}\b/.test(line)) continue; // print date/time stamp
 
@@ -251,6 +257,7 @@ export function parseRanjanLines(lines, fileName = "") {
       const rest = mp[1];
       const comma = rest.indexOf(",");
       party = (comma > 0 ? rest.slice(0, comma) : rest.replace(/\s*Ph\.?:.*$/i, "")).trim();
+      meta.parties[party] = rest.trim();
       continue;
     }
 
@@ -277,7 +284,7 @@ export function parseRanjanLines(lines, fileName = "") {
   if (!bills.length) {
     throw new Error("No bills found. Expected the “Agent Outstanding With Party Eject” report (Party / Bill No / Date / Debit / Credit / Balance / Late Days).");
   }
-  return { asOn: asOn || todayIso(), company, fileName, uploadedAt: new Date().toISOString(), bills, skipped };
+  return { asOn: asOn || todayIso(), company, meta, fileName, uploadedAt: new Date().toISOString(), bills, skipped };
 }
 
 // Excel/CSV rows -> one text line per row (dates written dd/mm/yy)
