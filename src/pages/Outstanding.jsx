@@ -22,7 +22,7 @@ import {
 } from "../utils/statementImage";
 import {
   BUCKETS, bucketOf, fmtDate, groupParties, overdueAmount, matchParty, resolvePhone,
-  buildStatementMessage, parseOutstandingFile, exportExcel,
+  buildStatementMessage, parseOutstandingFile, diffDays, exportExcel,
   loadSnapshot, saveSnapshot, loadLinks, saveLinks, loadSent, saveSent,
   loadSettings, saveSettings, DEFAULT_FOOTER, compactINR, summaryMessage, SOURCES, companyFor,
 } from "../utils/outstanding";
@@ -84,7 +84,19 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   const showToast = useToast();
   const fileRef = useRef(null);
 
-  const [snap, setSnap] = useState(() => loadSnapshot(source));
+  const [snapRaw, setSnap] = useState(() => loadSnapshot(source));
+  const [asOnPick, setAsOnPick] = useState(null); // back-dated view (null = report date)
+  // Back-dated view: bills after the chosen date are dropped and ageing is recounted
+  // from that date. Amounts stay as per the uploaded report (later payments are not undone).
+  const backdated = !!(snapRaw && asOnPick && asOnPick < snapRaw.asOn);
+  const snap = useMemo(() => {
+    if (!snapRaw || !backdated) return snapRaw;
+    return {
+      ...snapRaw,
+      asOn: asOnPick,
+      bills: snapRaw.bills.filter((b) => b.date <= asOnPick).map((b) => ({ ...b, days: Math.max(0, diffDays(asOnPick, b.date)) })),
+    };
+  }, [snapRaw, asOnPick, backdated]);
   const [links, setLinks] = useState(() => loadLinks(source));
   const [sent, setSent] = useState(() => loadSent(source));
   const [settings, setSettings] = useState(() => loadSettings(source));
@@ -198,7 +210,9 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   };
   const updateSettings = (s) => { setSettings(s); saveSettings(s, source); pushCloud({ settings: s }); };
 
+  const lockMsg = () => showToast("Back-dated view is for viewing only — set the date back to the report date to send statements.", "info");
   const startQueue = (list, opts) => {
+    if (backdated) { lockMsg(); return; }
     const items = list
       .filter((r) => r.phone)
       .map((r) => ({
@@ -251,7 +265,18 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
         <input ref={fileRef} type="file" accept={cfg.accept} className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
       </Header>
 
-      <div className="text-xs text-muted -mt-3">As on <b className="text-ink">{fmtDate(snap.asOn)}</b> · {snap.fileName} · <SyncBadge sync={sync} /></div>
+      <div className="text-xs text-muted -mt-3 flex items-center gap-x-2 gap-y-1 flex-wrap">
+        <span>As on</span>
+        <input type="date" value={snap.asOn} max={snapRaw.asOn} onChange={(e) => setAsOnPick(e.target.value && e.target.value < snapRaw.asOn ? e.target.value : null)}
+          className="border border-line rounded-md px-2 py-1 text-xs font-bold text-ink bg-white" aria-label="As on date" />
+        {backdated && <button onClick={() => setAsOnPick(null)} className="font-semibold text-ink2 underline">Latest ({fmtDate(snapRaw.asOn)})</button>}
+        <span>· {snapRaw.fileName} ·</span> <SyncBadge sync={sync} />
+      </div>
+      {backdated && (
+        <div className="bg-thread/10 border border-thread/30 text-thread rounded-xl px-3 py-2 text-xs font-semibold -mt-2">
+          Back-dated view as on {fmtDate(asOnPick)} — ageing recounted and later bills hidden. Payments received after this date are not added back, so totals are an estimate. Sending is switched off.
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KpiCard label="Net Outstanding" value={compactINR(totals.net)} icon={Wallet} sub={`${inr(totals.net)} · ${groups.length} parties`} />
@@ -270,7 +295,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       </div>
 
       {tab === "statements" && (
-        <StatementsTab onStatement={setStmtKey} onOpen={setDetailKey} rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
+        <StatementsTab onStatement={(k) => (backdated ? lockMsg() : setStmtKey(k))} onOpen={setDetailKey} rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
           onLink={setLinking} onConfirm={(r) => updateLink(r.g.key, { ...(r.link || {}), customerId: r.match.customer.id })}
           showToast={showToast} />
       )}
@@ -282,7 +307,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       {detailKey && rows.find((r) => r.g.key === detailKey) && (
         <PartyDetail row={rows.find((r) => r.g.key === detailKey)} settings={settings} snap={snap}
           onClose={() => setDetailKey(null)}
-          onStatement={(r) => { setDetailKey(null); setStmtKey(r.g.key); }}
+          onStatement={(r) => { if (backdated) { lockMsg(); return; } setDetailKey(null); setStmtKey(r.g.key); }}
           onSend={(r, o) => { setDetailKey(null); startQueue([r], o); }} />
       )}
       {stmtKey && rows.find((r) => r.g.key === stmtKey) && (
@@ -383,9 +408,9 @@ function StatementsTab({ onStatement, onOpen, rows, sent, settings, snap, startQ
         {list.map((r) => {
           const ok = eligible(r);
           return (
-            <div key={r.g.key} className="bg-panel border border-line rounded-xl p-3 sm:p-4 flex items-center gap-3 flex-wrap">
-              <input type="checkbox" disabled={!ok} checked={sel.has(r.g.key)} onChange={() => toggle(r.g.key)} className="w-4 h-4" />
-              <div className="flex-1 min-w-[180px]">
+            <div key={r.g.key} className="bg-panel border border-line rounded-xl p-3 sm:p-4 grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 gap-y-2.5 items-start">
+              <input type="checkbox" disabled={!ok} checked={sel.has(r.g.key)} onChange={() => toggle(r.g.key)} className="w-4 h-4 mt-1" />
+              <div className="min-w-0">
                 <div className="font-semibold text-sm flex items-center gap-2 flex-wrap">
                   <button onClick={() => onOpen(r.g.key)} className="text-left hover:underline">{r.g.name}</button>
                   {sent[r.g.key] && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Sent</span>}
@@ -402,11 +427,11 @@ function StatementsTab({ onStatement, onOpen, rows, sent, settings, snap, startQ
                   {" · "}{r.g.bills.length} bill{r.g.bills.length > 1 ? "s" : ""}
                 </div>
               </div>
-              <div className="text-right">
-                <div className={`font-display font-bold ${r.g.total < 0 ? "text-loom" : ""}`}>{inr(r.g.total)}</div>
-                {r.g.due > 0 && <DaysBadge days={r.g.oldest} />}
+              <div className="text-right shrink-0">
+                <div className={`font-display font-bold text-base whitespace-nowrap ${r.g.total < 0 ? "text-loom" : ""}`}>{inr(r.g.total)}</div>
+                {r.g.due > 0 && <div className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-muted">oldest <DaysBadge days={r.g.oldest} /></div>}
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="col-span-3 flex items-center justify-end gap-1.5">
                 {(r.match.status !== "auto" || !r.phone) && (
                   <button onClick={() => onLink(r.g)} className="p-2 rounded-lg border border-line hover:bg-paper text-ink2" aria-label="Link customer / phone"><Link2 size={15} /></button>
                 )}
@@ -430,7 +455,7 @@ function BillBars({ g, limit = 3 }) {
   const max = Math.max(1, ...bills.map((b) => Math.abs(b.outstanding)));
   const shown = all ? bills : bills.slice(0, limit);
   return (
-    <div className="basis-full w-full flex flex-col gap-2 pt-2 border-t border-line/70">
+    <div className="col-span-3 basis-full w-full flex flex-col gap-2 pt-2 border-t border-line/70">
       {shown.map((b, i) => {
         const neg = b.outstanding < 0;
         const color = neg ? "#2F6E5D" : bucketOf(b.days).color;

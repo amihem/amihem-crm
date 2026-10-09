@@ -385,26 +385,35 @@ export function PriorityTab({ rows, settings, snap, company, startQueue, onOpen 
           <MessageCircle size={14} /> Remind all overdue ({sendable.length})
         </button>
       </div>
-      {list.map((r, i) => (
-        <div key={r.g.key} className="bg-panel border border-line rounded-xl p-3 sm:p-4">
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className={`w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center shrink-0 ${i < 3 ? "bg-rust text-white" : "bg-ink/10 text-ink"}`}>{i + 1}</span>
-            <div className="flex-1 min-w-[160px]">
-              <button onClick={() => onOpen(r.g.key)} className="font-semibold text-sm text-left hover:underline">{r.g.name}</button>
-              <div className="text-xs text-muted flex items-center gap-2 mt-0.5 flex-wrap">{overdueBills(r)} overdue bill{overdueBills(r) > 1 ? "s" : ""} · oldest <DaysBadge days={r.g.oldest} /> · total dues {inr(r.g.due)}</div>
+      {list.map((r, i) => {
+        const ob = overdueBills(r);
+        return (
+          <div key={r.g.key} className="bg-panel border border-line rounded-xl p-3 sm:p-4">
+            <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 items-start">
+              <span className={`w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center ${i < 3 ? "bg-rust text-white" : "bg-ink/10 text-ink"}`}>{i + 1}</span>
+              <div className="min-w-0">
+                <button onClick={() => onOpen(r.g.key)} className="font-semibold text-sm text-left hover:underline leading-snug">{r.g.name}</button>
+                <div className="text-xs text-muted mt-1 flex items-center gap-1.5 flex-wrap">
+                  <span>{ob} overdue bill{ob > 1 ? "s" : ""}</span><span>·</span><span className="flex items-center gap-1">oldest <DaysBadge days={r.g.oldest} /></span>
+                </div>
+                <div className="text-xs text-muted mt-1">Total dues <b className="text-ink">{inr(r.g.due)}</b></div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Overdue</div>
+                <div className="font-display font-bold text-base text-rust whitespace-nowrap">{inr(r.overdue)}</div>
+                <div className="text-[11px] text-muted whitespace-nowrap">{Math.round((r.overdue / r.g.due) * 100)}% of dues</div>
+              </div>
             </div>
-            <div className="text-right">
-              <div className="font-display font-bold text-rust">{inr(r.overdue)}</div>
-              <div className="text-[11px] text-muted">{Math.round((r.overdue / r.g.due) * 100)}% of dues overdue</div>
-            </div>
-            <div className="flex gap-1.5">
-              {r.phone && <a href={`tel:${r.phone}`} className="p-2 rounded-lg border border-line hover:bg-paper" aria-label="Call"><Phone size={15} /></a>}
-              <button disabled={!(r.match.status === "auto" && r.phone)} onClick={() => startQueue([r], { onlyOverdue: true })} className="p-2 rounded-lg bg-loom text-white disabled:opacity-30" aria-label="WhatsApp reminder"><MessageCircle size={15} /></button>
+            <div className="flex items-center gap-3 mt-3">
+              <div className="flex-1 h-2 rounded-full bg-paper overflow-hidden"><div className="h-full rounded-full bg-rust" style={{ width: `${(r.overdue / max) * 100}%` }} /></div>
+              <div className="flex gap-1.5 shrink-0">
+                {r.phone && <a href={`tel:${r.phone}`} className="p-2 rounded-lg border border-line hover:bg-paper" aria-label="Call"><Phone size={15} /></a>}
+                <button disabled={!(r.match.status === "auto" && r.phone)} onClick={() => startQueue([r], { onlyOverdue: true })} className="p-2 rounded-lg bg-loom text-white disabled:opacity-30" aria-label="WhatsApp reminder"><MessageCircle size={15} /></button>
+              </div>
             </div>
           </div>
-          <div className="h-1.5 rounded-full bg-paper mt-3 overflow-hidden"><div className="h-full rounded-full bg-rust" style={{ width: `${(r.overdue / max) * 100}%` }} /></div>
-        </div>
-      ))}
+        );
+      })}
       {!list.length && <div className="text-center text-sm text-muted py-10 flex flex-col items-center gap-2"><Clock size={22} />No overdue bills 🎉</div>}
     </div>
   );
