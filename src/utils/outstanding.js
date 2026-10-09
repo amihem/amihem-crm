@@ -28,6 +28,7 @@ const K_SNAP = "amihem_crm_outstanding_snapshot";
 const K_LINKS = "amihem_crm_outstanding_links";
 const K_SENT = "amihem_crm_outstanding_sent";
 const K_SET = "amihem_crm_outstanding_settings";
+const K_COLL = "amihem_crm_outstanding_collections";
 
 function read(key, fallback) {
   try {
@@ -58,6 +59,31 @@ export const saveSent = (s, source) => write(kk(K_SENT, source), s);
 export const DEFAULT_FOOTER = "Kindly arrange the payment at the earliest. Please ignore if already paid.";
 export const loadSettings = (source) => ({ creditDays: 60, footer: DEFAULT_FOOTER, ...read(kk(K_SET, source), {}) });
 export const saveSettings = (s, source) => write(kk(K_SET, source), s);
+
+// Collections recorded against the outstanding + payment advices issued to the supplier.
+export const loadCollections = (source) => ({ entries: [], advices: [], nextAdvNo: 43, profile: null, updatedAt: "", ...read(kk(K_COLL, source), {}) });
+export const saveCollections = (c, source) => write(kk(K_COLL, source), c);
+
+// Collection weeks run Tuesday → Monday.
+export function weekStartIso(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - ((dt.getUTCDay() - 2 + 7) % 7));
+  return dt.toISOString().slice(0, 10);
+}
+export function addDaysIso(iso, n) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+}
+export const weekLabel = (start) => {
+  const f = (i, w) => `${w} ${pad(+i.slice(8))}-${MONTHS[+i.slice(5, 7) - 1]}`;
+  return `${f(start, "Tue")} → ${f(addDaysIso(start, 6), "Mon")}`;
+};
+// "SL/1413-26" -> "1413"
+export const shortInv = (billNo) => String(billNo || "").replace(/^[A-Za-z]+\/(?:[A-Za-z]+\/)?/, "").replace(/-\d{2}$/, "");
+export { todayIso };
 
 // ---------- sources (one outstanding report per company ledger) ----------
 export const SOURCES = [

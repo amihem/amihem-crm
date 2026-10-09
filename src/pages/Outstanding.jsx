@@ -10,6 +10,7 @@ import { isSupabaseConfigured } from "../services/supabaseClient";
 import { pullState, pushState, isSetupError, uploadStatement } from "../services/outstandingSync";
 import Modal from "../components/Modal.jsx";
 import { SummaryTab, BillsTab, MonthTab, PriorityTab } from "./outstandingReports.jsx";
+import CollectionsTab from "./outstandingCollections.jsx";
 import KpiCard from "../components/KpiCard.jsx";
 import SearchDropdown from "../components/SearchDropdown.jsx";
 import { buildWhatsAppLink } from "../services/whatsapp";
@@ -24,7 +25,7 @@ import {
   BUCKETS, bucketOf, fmtDate, groupParties, overdueAmount, matchParty, resolvePhone,
   buildStatementMessage, parseOutstandingFile, diffDays, exportExcel,
   loadSnapshot, saveSnapshot, loadLinks, saveLinks, loadSent, saveSent,
-  loadSettings, saveSettings, DEFAULT_FOOTER, compactINR, summaryMessage, SOURCES, companyFor,
+  loadSettings, saveSettings, DEFAULT_FOOTER, compactINR, summaryMessage, SOURCES, companyFor, loadCollections, saveCollections,
 } from "../utils/outstanding";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
@@ -34,6 +35,7 @@ const TABS = [
   { id: "bills", label: "Bill-wise Ageing" },
   { id: "month", label: "Month-wise" },
   { id: "priority", label: "Collection Priority" },
+  { id: "collections", label: "Collections & Advice" },
 ];
 
 function DaysBadge({ days }) {
@@ -109,6 +111,13 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   const [detailKey, setDetailKey] = useState(null);
   const [stmtKey, setStmtKey] = useState(null);
   const company = companyFor(source, snap);
+  const [coll, setColl] = useState(() => loadCollections(source));
+  const updateColl = (fn) => {
+    const next = { ...fn(coll), updatedAt: new Date().toISOString() };
+    setColl(next);
+    saveCollections(next, source);
+    pushCloud({ collections: next });
+  };
   const [sync, setSync] = useState(isSupabaseConfigured ? "syncing" : "off");
 
   const pushCloud = (patch) => {
@@ -127,9 +136,15 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
         const remote = await pullState(source);
         if (dead) return;
         const local = loadSnapshot(source);
+        const lc = loadCollections(source);
+        const rc = remote?.collections || {};
+        if (remote) {
+          if ((lc.updatedAt || "") > (rc.updatedAt || "")) await pushState(source, { collections: lc });
+          else if (rc.updatedAt && rc.updatedAt !== lc.updatedAt) { saveCollections({ ...lc, ...rc }, source); setColl(loadCollections(source)); }
+        }
         const all = () => ({ snapshot: local, links: loadLinks(source), sent: loadSent(source), settings: loadSettings(source) });
         if (!remote) {
-          if (local) await pushState(source, all());
+          if (local || lc.updatedAt) await pushState(source, { ...(local ? all() : {}), ...(lc.updatedAt ? { collections: lc } : {}) });
           if (!dead) setSync("ok");
           return;
         }
@@ -286,7 +301,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       </div>
 
       <div className="flex gap-1 overflow-x-auto border-b border-line">
-        {TABS.map((t) => (
+        {TABS.filter((t) => t.id !== "collections" || source === "ranjan").map((t) => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`px-4 py-2.5 text-sm font-semibold whitespace-nowrap border-b-2 -mb-px transition ${tab === t.id ? "border-ink text-ink" : "border-transparent text-muted hover:text-ink"}`}>
             {t.label}
@@ -302,6 +317,9 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       {tab === "summary" && <SummaryTab rows={rows} totals={totals} snap={snap} settings={settings} company={company} onOpen={setDetailKey} />}
       {tab === "bills" && <BillsTab snap={snap} settings={settings} company={company} />}
       {tab === "month" && <MonthTab snap={snap} settings={settings} company={company} />}
+      {tab === "collections" && source === "ranjan" && (
+        <CollectionsTab groups={groupParties(snapRaw.bills)} coll={coll} updateColl={updateColl} company={company} showToast={showToast} />
+      )}
       {tab === "priority" && <PriorityTab rows={rows} settings={settings} snap={snap} company={company} startQueue={startQueue} onOpen={setDetailKey} />}
 
       {detailKey && rows.find((r) => r.g.key === detailKey) && (
