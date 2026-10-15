@@ -110,6 +110,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   const [showSettings, setShowSettings] = useState(false);
   const [detailKey, setDetailKey] = useState(null);
   const [stmtKey, setStmtKey] = useState(null);
+  const [prep, setPrep] = useState(null);
   const company = companyFor(source, snap);
   const [coll, setColl] = useState(() => loadCollections(source));
   const updateColl = (fn) => {
@@ -226,17 +227,64 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   const updateSettings = (s) => { setSettings(s); saveSettings(s, source); pushCloud({ settings: s }); };
 
   const lockMsg = () => showToast("Back-dated view is for viewing only — set the date back to the report date to send statements.", "info");
-  const startQueue = (list, opts) => {
+  // Build the customer's PDF + image, store them online and return the WhatsApp message with both links.
+  const makeLinkMessage = async (r) => {
+    let pdf, png;
+    if (source === "ranjan") {
+      const pages = buildLedgerPages(r.g, snap, { format: "ranjan", company, logo: true });
+      pdf = await ledgerPdfBlob(pages, RANJAN_LOGO);
+      png = await canvasToBlob(await ledgerPageCanvas(pages[0], RANJAN_LOGO, 2.2, pages.length === 1));
+    } else {
+      const card = renderStatementCanvas(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company });
+      [pdf, png] = await Promise.all([canvasToPdfBlob(card), canvasToBlob(card)]);
+    }
+    const name = (ext) => statementFileName(r.g, ext).replace("Statement_", source === "ranjan" ? "Outstanding_" : "Statement_");
+    const [pu, iu] = await Promise.all([uploadStatement(pdf, name("pdf")), uploadStatement(png, name("png"))]);
+    return `${statementCaption(r.g, snap.asOn, company)}\n\nStatement (PDF): ${pu}\nStatement (Image): ${iu}`;
+  };
+  const linkError = () => showToast("Couldn't create the links — run supabase/outstanding.sql once, then retry.", "error");
+
+  // One tap: create PDF + image, then open the customer's own WhatsApp chat with both links ready to send.
+  const quickSend = async (r) => {
     if (backdated) { lockMsg(); return; }
-    const items = list
-      .filter((r) => r.phone)
-      .map((r) => ({
-        key: r.g.key, name: r.g.name, phone: r.phone,
-        message: buildStatementMessage(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, ...opts }),
-      }));
-    if (!items.length) { showToast("No phone number available for the selected parties.", "error"); return; }
-    if (items.length < list.length) showToast(`${list.length - items.length} skipped — no phone number.`, "info");
-    setQueue(items);
+    if (!r.phone) { showToast("No phone number linked for this customer.", "error"); return; }
+    try {
+      setPrep(`Preparing ${r.g.name}…`);
+      const text = await makeLinkMessage(r);
+      markSent(r.g.key);
+      const l = buildWhatsAppLink(r.phone, text);
+      if (!window.open(l, "_blank")) window.location.href = l;
+    } catch (e) {
+      linkError();
+    } finally {
+      setPrep(null);
+    }
+  };
+
+  const startQueue = async (list, opts) => {
+    if (backdated) { lockMsg(); return; }
+    const withPhone = list.filter((r) => r.phone);
+    if (!withPhone.length) { showToast("No phone number available for the selected parties.", "error"); return; }
+    if (withPhone.length < list.length) showToast(`${list.length - withPhone.length} skipped — no phone number.`, "info");
+    if (opts?.links) {
+      try {
+        const items = [];
+        for (let i = 0; i < withPhone.length; i++) {
+          setPrep(`Preparing ${i + 1} of ${withPhone.length}…`);
+          items.push({ key: withPhone[i].g.key, name: withPhone[i].g.name, phone: withPhone[i].phone, message: await makeLinkMessage(withPhone[i]) });
+        }
+        setQueue(items);
+      } catch (e) {
+        linkError();
+      } finally {
+        setPrep(null);
+      }
+      return;
+    }
+    setQueue(withPhone.map((r) => ({
+      key: r.g.key, name: r.g.name, phone: r.phone,
+      message: buildStatementMessage(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, ...opts }),
+    })));
   };
 
   // ---------- empty state ----------
@@ -310,7 +358,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       </div>
 
       {tab === "statements" && (
-        <StatementsTab onStatement={(k) => (backdated ? lockMsg() : setStmtKey(k))} onOpen={setDetailKey} rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
+        <StatementsTab onQuick={quickSend} onStatement={(k) => (backdated ? lockMsg() : setStmtKey(k))} onOpen={setDetailKey} rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
           onLink={setLinking} onConfirm={(r) => updateLink(r.g.key, { ...(r.link || {}), customerId: r.match.customer.id })}
           showToast={showToast} />
       )}
@@ -330,6 +378,11 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       )}
       {stmtKey && rows.find((r) => r.g.key === stmtKey) && (
         <StatementModal company={company} source={source} row={rows.find((r) => r.g.key === stmtKey)} snap={snap} settings={settings} onClose={() => setStmtKey(null)} showToast={showToast} />
+      )}
+      {prep && (
+        <div className="fixed inset-x-0 bottom-24 flex justify-center z-50 pointer-events-none">
+          <div className="bg-ink text-white text-sm font-semibold px-4 py-2 rounded-full shadow-lg">{prep}</div>
+        </div>
       )}
       {queue && <SendModal queue={queue} onSent={markSent} onClose={() => setQueue(null)} />}
       {linking && (
@@ -366,13 +419,14 @@ function Header({ children }) {
 }
 
 // ---------------- Tab 1: statements ----------------
-function StatementsTab({ onStatement, onOpen, rows, sent, settings, snap, startQueue, onLink, onConfirm, showToast }) {
+function StatementsTab({ onQuick, onStatement, onOpen, rows, sent, settings, snap, startQueue, onLink, onConfirm, showToast }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
   const [sel, setSel] = useState(new Set());
   const [onlyOverdue, setOnlyOverdue] = useState(false);
   const [showAgeing, setShowAgeing] = useState(false);
   const [sort, setSort] = useState("amount");
+  const [useLinks, setUseLinks] = useState(true);
 
   const eligible = (r) => r.match.status === "auto" && r.phone && r.g.total > 0;
   const list0 = rows.filter((r) => {
@@ -410,7 +464,8 @@ function StatementsTab({ onStatement, onOpen, rows, sent, settings, snap, startQ
         {sel.size > 0 && <button onClick={() => setSel(new Set())} className="text-muted font-semibold hover:underline">Clear</button>}
         <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={onlyOverdue} onChange={(e) => setOnlyOverdue(e.target.checked)} /> Only bills &gt; {settings.creditDays}d</label>
         <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={showAgeing} onChange={(e) => setShowAgeing(e.target.checked)} /> Add ageing summary</label>
-        <button disabled={!chosen.length} onClick={() => startQueue(chosen, opts)}
+        <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={useLinks} onChange={(e) => setUseLinks(e.target.checked)} /> PDF + image</label>
+        <button disabled={!chosen.length} onClick={() => startQueue(chosen, { ...opts, links: useLinks })}
           className="ml-auto bg-loom text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 disabled:opacity-40">
           <Send size={14} /> Send via WhatsApp ({chosen.length})
         </button>
@@ -454,7 +509,8 @@ function StatementsTab({ onStatement, onOpen, rows, sent, settings, snap, startQ
                   <button onClick={() => onLink(r.g)} className="p-2 rounded-lg border border-line hover:bg-paper text-ink2" aria-label="Link customer / phone"><Link2 size={15} /></button>
                 )}
                 <button disabled={r.g.bills.length === 0} onClick={() => onStatement(r.g.key)} className="p-2 rounded-lg border border-line hover:bg-paper disabled:opacity-30" aria-label="Statement PDF / Image"><FileText size={15} /></button>
-                <button disabled={!ok} onClick={() => startQueue([r], opts)} className="p-2 rounded-lg bg-loom text-white disabled:opacity-30" aria-label="WhatsApp"><MessageCircle size={15} /></button>
+                <button disabled={!ok} onClick={() => startQueue([r], opts)} title="Send the statement as a text message" className="p-2 rounded-lg border border-line hover:bg-paper disabled:opacity-30" aria-label="WhatsApp text message"><MessageCircle size={15} /></button>
+                <button disabled={!ok} onClick={() => onQuick(r)} title="Create PDF + image and send on WhatsApp" className="px-3 py-2 rounded-lg bg-loom text-white disabled:opacity-30 flex items-center gap-1.5 text-xs font-semibold" aria-label="Send PDF and image on WhatsApp"><Send size={14} /> PDF + Image</button>
               </div>
               <BillBars g={r.g} />
             </div>
