@@ -57,7 +57,7 @@ export const saveLinks = (l, source) => write(kk(K_LINKS, source), l);
 export const loadSent = (source) => read(kk(K_SENT, source), {});
 export const saveSent = (s, source) => write(kk(K_SENT, source), s);
 export const DEFAULT_FOOTER = "Kindly arrange the payment at the earliest. Please ignore if already paid.";
-export const loadSettings = (source) => ({ creditDays: 60, footer: DEFAULT_FOOTER, ...read(kk(K_SET, source), {}) });
+export const loadSettings = (source) => ({ creditDays: 60, footer: DEFAULT_FOOTER, paymentDetails: "", ...read(kk(K_SET, source), {}) });
 export const saveSettings = (s, source) => write(kk(K_SET, source), s);
 
 // Collections recorded against the outstanding + payment advices issued to the supplier.
@@ -392,6 +392,34 @@ export function groupParties(bills) {
 export const overdueAmount = (g, creditDays) =>
   g.bills.reduce((s, b) => (b.outstanding > 0 && b.days > creditDays ? s + b.outstanding : s), 0);
 
+// ---------- bill-wise selection ----------
+export const billKey = (b) => `${b.billNo}|${b.date}|${b.outstanding}`;
+// A group that only contains the chosen bills (keys = Set of billKey), totals recomputed.
+export function subGroup(g, keys) {
+  const sub = groupParties(g.bills.filter((b) => keys.has(billKey(b))))[0];
+  if (sub) return { ...sub, key: g.key, name: g.name };
+  return { ...g, bills: [], total: 0, due: 0, advance: 0, oldest: 0, buckets: Object.fromEntries(BUCKETS.map((k) => [k.key, 0])) };
+}
+
+// ---------- history (compare with earlier uploads) ----------
+export function summarizeSnapshot(snap) {
+  const gs = groupParties(snap.bills);
+  return {
+    asOn: snap.asOn,
+    net: gs.reduce((t, g) => t + g.total, 0),
+    due: gs.reduce((t, g) => t + g.due, 0),
+    buckets: Object.fromEntries(BUCKETS.map((b) => [b.key, gs.reduce((t, g) => t + g.buckets[b.key], 0)])),
+    parties: Object.fromEntries(gs.map((g) => [g.name, { total: g.total, due: g.due, oldest: g.oldest }])),
+  };
+}
+// previous = the snapshot being replaced; keeps the last 12 earlier reports (one per date)
+export function nextHistory(previous, incoming) {
+  if (!previous) return [];
+  const hist = (previous.history || []).filter((h) => h.asOn !== previous.asOn);
+  if (previous.asOn === incoming.asOn) return hist;
+  return [...hist, summarizeSnapshot(previous)].slice(-12);
+}
+
 // ---------- customer matching ----------
 const tokens = (s) => new Set(s.split(" ").filter(Boolean));
 function jaccard(a, b) {
@@ -461,6 +489,7 @@ export function buildStatementMessage(group, asOn, opts = {}) {
     const parts = BUCKETS.filter((k) => group.buckets[k.key] > 0).map((k) => `${k.label} days: ${rs(group.buckets[k.key])}`);
     if (parts.length) out.push("", "Ageing:", ...parts);
   }
+  if (opts.payment) out.push("", "*Payment details*", opts.payment);
   if (footer) out.push("", footer);
   out.push("", "Regards", company);
   return out.join("\n");

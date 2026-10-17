@@ -6,6 +6,7 @@ import { getCompanyName } from "../services/companyProfile";
 import { buildWhatsAppLink } from "../services/whatsapp";
 import { formatCurrency, downloadBlob } from "./helpers";
 import { BUCKETS, bucketOf, fmtDate, overdueAmount } from "./outstanding";
+import { inWords } from "./advicePdf";
 
 const W = 1080;
 const SCALE = 2;
@@ -50,7 +51,7 @@ function wrap(ctx, text, maxW, size) {
   return out.filter((l) => l !== "" || out.length > 1);
 }
 
-export function renderStatementCanvas(group, asOn, { creditDays = 60, footer = "", company = getCompanyName() } = {}) {
+export function renderStatementCanvas(group, asOn, { creditDays = 60, footer = "", company = getCompanyName(), payment = "" } = {}) {
   const bills = [...group.bills].sort((a, b) => a.date.localeCompare(b.date));
   const n = bills.length;
   const maxAmt = Math.max(1, ...bills.map((b) => Math.abs(b.outstanding)));
@@ -59,11 +60,16 @@ export function renderStatementCanvas(group, asOn, { creditDays = 60, footer = "
 
   const m = document.createElement("canvas").getContext("2d");
   const fLines = footer ? wrap(m, footer, W - 96, 21) : [];
+  const pLines = payment ? wrap(m, payment, W - 96 - 56, 21) : [];
+  const words = group.total > 0 ? inWords(group.total) : "";
 
   const ROW = 76;
   const tableTop = 740;
   const totalTop = tableTop + n * ROW + 10;
-  const footStart = totalTop + 84 + 40;
+  const wordsH = words ? 40 : 0;
+  const payTop = totalTop + 84 + wordsH + 18;
+  const payH = pLines.length ? 64 + pLines.length * 30 : 0;
+  const footStart = totalTop + 84 + wordsH + (payH ? 18 + payH : 0) + 40;
   const H = footStart + (fLines.length ? fLines.length * 32 + 20 : 0) + 70;
 
   const canvas = document.createElement("canvas");
@@ -137,8 +143,14 @@ export function renderStatementCanvas(group, asOn, { creditDays = 60, footer = "
     const neg = b.outstanding < 0;
     const color = neg ? GREEN : bucketOf(b.days).color;
     T(ctx, neg ? (b.billNo && !/advance/i.test(b.billNo) ? `Credit · ${b.billNo}` : "Advance / Credit") : `Bill ${b.billNo}`, 48, cy - 4, { size: 26, weight: 700, color: NAVY });
+    const late = !neg && b.days > creditDays;
     const sub = `${short(b.date)}${b.credit > 0 && b.amount > 0 ? ` · rcvd ${rs(b.credit)}` : ""}`;
     T(ctx, sub, 48, cy + 24, { size: 18, color: GRAY });
+    if (late) {
+      ctx.font = `400 18px ${FONT}`;
+      const sw = ctx.measureText(sub).width;
+      T(ctx, "· OVERDUE", 48 + sw + 8, cy + 24, { size: 17, weight: 700, color: "#B4453A" });
+    }
     rr(ctx, BX, cy - 11, BW, 22, 11, "#EEF0F3");
     rr(ctx, BX, cy - 11, Math.max(16, (Math.abs(b.outstanding) / maxAmt) * BW), 22, 11, color);
     T(ctx, `${neg ? "-" : ""}${rs(Math.abs(b.outstanding))}`, AMT, cy + 9, { size: 27, weight: 700, color: neg ? GREEN : "#111827", align: "right" });
@@ -151,6 +163,13 @@ export function renderStatementCanvas(group, asOn, { creditDays = 60, footer = "
   rr(ctx, 48, totalTop, W - 96, 84, 16, NAVY);
   T(ctx, "TOTAL OUTSTANDING", 76, totalTop + 52, { size: 24, weight: 700, color: "#fff" });
   T(ctx, rs(group.total), W - 76, totalTop + 55, { size: 38, weight: 700, color: "#fff", align: "right" });
+
+  if (words) T(ctx, words, 48, totalTop + 84 + 28, { size: 20, weight: 600, color: GRAY });
+  if (pLines.length) {
+    rr(ctx, 48, payTop, W - 96, payH, 16, "#F3F4F6");
+    T(ctx, "PAYMENT DETAILS", 76, payTop + 38, { size: 18, weight: 700, color: GRAY });
+    pLines.forEach((l, i) => T(ctx, l, 76, payTop + 74 + i * 30, { size: 21, weight: 600, color: NAVY }));
+  }
 
   // footer
   fLines.forEach((l, i) => T(ctx, l, 48, footStart + i * 32, { size: 21, color: GRAY }));
