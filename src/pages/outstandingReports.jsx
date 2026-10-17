@@ -3,11 +3,11 @@
 // Each has an on-screen view plus a branded PDF and an Excel export.
 
 import { useMemo, useState } from "react";
-import { Search, Download, Phone, MessageCircle, Clock, AlertTriangle, Hourglass, Trophy, Percent } from "lucide-react";
+import { Search, Download, Phone, MessageCircle, Clock, AlertTriangle, Hourglass, Trophy, Percent, TrendingUp, TrendingDown } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from "recharts";
 import { useToast } from "../context/ToastContext.jsx";
 import { formatCurrency, downloadBlob } from "../utils/helpers";
-import { BUCKETS, bucketOf, fmtDate, compactINR, exportExcel } from "../utils/outstanding";
+import { BUCKETS, bucketOf, fmtDate, compactINR, exportExcel, summarizeSnapshot } from "../utils/outstanding";
 import { buildReportPdf } from "../utils/reportPdf";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
@@ -58,6 +58,7 @@ function weightedAge(bills) {
 // ======================= Ageing Summary =======================
 export function SummaryTab({ rows, totals, snap, settings, company, onOpen }) {
   const [sort, setSort] = useState({ key: "total", dir: -1 });
+  const [bk, setBk] = useState(null); // clicked ageing bucket
   const dueSum = BUCKETS.reduce((s, b) => s + totals.buckets[b.key], 0) || 1;
   const posBills = snap.bills.filter((b) => b.outstanding > 0);
   const oldest = posBills.reduce((m, b) => (b.days > (m?.days ?? -1) ? b : m), null);
@@ -67,6 +68,9 @@ export function SummaryTab({ rows, totals, snap, settings, company, onOpen }) {
     const x = val(a.g, sort.key), y = val(b.g, sort.key);
     return (typeof x === "string" ? x.localeCompare(y) : x - y) * sort.dir;
   });
+  const shownRows = bk ? sorted.filter((r) => r.g.buckets[bk] > 0).sort((a, b) => (sort.key === "total" ? b.g.buckets[bk] - a.g.buckets[bk] : 0)) : sorted;
+  const top10 = [...rows].filter((r) => r.g.due > 0).sort((a, b) => b.g.due - a.g.due).slice(0, 10);
+  const top10Max = Math.max(1, ...top10.map((r) => r.g.due));
   const colMax = Object.fromEntries(BUCKETS.map((b) => [b.key, Math.max(1, ...rows.map((r) => r.g.buckets[b.key]))]));
   const heat = (v, b) => (v ? { background: `${b.color}${Math.round(16 + 48 * (v / colMax[b.key])).toString(16).padStart(2, "0")}` } : undefined);
 
@@ -110,17 +114,33 @@ export function SummaryTab({ rows, totals, snap, settings, company, onOpen }) {
           {BUCKETS.map((b) => {
             const parties = rows.filter((r) => r.g.buckets[b.key] > 0).length;
             return (
-              <div key={b.key} className="rounded-xl border border-line bg-paper/50 p-2.5 text-center" style={{ borderTop: `3px solid ${b.color}` }}>
+              <button key={b.key} onClick={() => setBk(bk === b.key ? null : b.key)} className={`rounded-xl border p-2.5 text-center transition ${bk === b.key ? "bg-white shadow-md" : "bg-paper/50 border-line hover:bg-white"}`} style={{ borderTop: `3px solid ${b.color}`, ...(bk === b.key ? { borderColor: b.color } : {}) }}>
                 <div className="text-[10px] font-bold" style={{ color: b.color }}>{b.label}d</div>
                 <div className="text-sm font-display font-bold mt-0.5">{compactINR(totals.buckets[b.key])}</div>
                 <div className="text-[10px] text-muted">{Math.round((totals.buckets[b.key] / dueSum) * 100)}% · {parties} pty</div>
-              </div>
+              </button>
             );
           })}
         </div>
       </div>
 
-      <ReportBar title="Ageing summary — party wise" note="Tap a party for its bills. Tap a heading to sort."
+      {top10.length > 0 && (
+        <div className="bg-panel border border-line rounded-2xl p-4">
+          <div className="text-xs font-semibold text-muted uppercase tracking-wide mb-3">Top {top10.length} parties — ageing mix</div>
+          <div className="flex flex-col gap-2.5">
+            {top10.map((r) => (
+              <button key={r.g.key} onClick={() => onOpen(r.g.key)} className="text-left">
+                <div className="flex items-baseline justify-between gap-2 text-xs"><span className="font-semibold truncate">{r.g.name}</span><span className="font-bold whitespace-nowrap">{compactINR(r.g.due)}</span></div>
+                <div className="h-2.5 rounded-full bg-paper overflow-hidden mt-1" style={{ width: `${Math.max(6, (r.g.due / top10Max) * 100)}%` }}>
+                  <div className="flex h-full">{BUCKETS.map((b) => r.g.buckets[b.key] > 0 && <div key={b.key} style={{ width: `${(r.g.buckets[b.key] / r.g.due) * 100}%`, background: b.color }} />)}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <ReportBar title={bk ? `Parties with ${BUCKETS.find((b) => b.key === bk).label} day bills` : "Ageing summary — party wise"} note={bk ? "Filtered by the ageing box you tapped — tap it again to clear." : "Tap an ageing box to filter. Tap a party for its bills. Tap a heading to sort."}
         onExcel={() => exportExcel(`Ageing_Summary_${snap.asOn}.xlsx`, "Ageing Summary", exportData(), cols)} onPdf={pdf} />
 
       <div className="bg-panel border border-line rounded-2xl overflow-x-auto">
@@ -136,7 +156,7 @@ export function SummaryTab({ rows, totals, snap, settings, company, onOpen }) {
             </tr>
           </thead>
           <tbody>
-            {sorted.map(({ g }, i) => (
+            {shownRows.map(({ g }, i) => (
               <tr key={g.key} onClick={() => onOpen(g.key)} className="border-b border-line last:border-0 cursor-pointer hover:bg-paper/60">
                 <td className="px-3 py-2.5 text-muted text-xs">{i + 1}</td>
                 <td className="px-3 font-medium sticky left-8 bg-panel z-10 max-w-[170px] truncate">{g.name}</td>
@@ -415,6 +435,116 @@ export function PriorityTab({ rows, settings, snap, company, startQueue, onOpen 
         );
       })}
       {!list.length && <div className="text-center text-sm text-muted py-10 flex flex-col items-center gap-2"><Clock size={22} />No overdue bills 🎉</div>}
+    </div>
+  );
+}
+
+
+// ======================= Movement vs an earlier report =======================
+export function MovementTab({ snap, company }) {
+  const hist = snap.history || [];
+  const [idx, setIdx] = useState(Math.max(0, hist.length - 1));
+  const [flt, setFlt] = useState("all");
+  const cur = useMemo(() => summarizeSnapshot(snap), [snap]);
+  const prev = hist[Math.min(idx, hist.length - 1)];
+
+  const data = useMemo(() => {
+    if (!prev) return [];
+    const names = new Set([...Object.keys(prev.parties), ...Object.keys(cur.parties)]);
+    return [...names].map((n) => {
+      const a = prev.parties[n]?.total || 0;
+      const b = cur.parties[n]?.total || 0;
+      const kind = !a && b ? "new" : a && !b ? "cleared" : b > a ? "up" : b < a ? "down" : "same";
+      return { name: n, prev: a, cur: b, diff: b - a, pct: a ? ((b - a) / Math.abs(a)) * 100 : null, kind };
+    }).filter((r) => r.prev || r.cur).sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff));
+  }, [prev, cur]);
+
+  if (!hist.length) {
+    return (
+      <div className="text-center text-sm text-muted py-12 border border-dashed border-line rounded-xl px-6">
+        <Clock size={22} className="mx-auto mb-2" />
+        Movement compares this report with your earlier uploads. It starts building history from your <b>next upload</b> — upload the next outstanding report and come back here.
+      </div>
+    );
+  }
+  const count = (k) => data.filter((r) => r.kind === k).length;
+  const change = cur.net - prev.net;
+  const list = flt === "all" ? data.filter((r) => r.kind !== "same") : data.filter((r) => r.kind === flt);
+  const kinds = [["all", "Changed"], ["up", `Increased (${count("up")})`], ["down", `Reduced (${count("down")})`], ["new", `New (${count("new")})`], ["cleared", `Cleared (${count("cleared")})`]];
+  const colr = (d) => (d > 0 ? "text-rust" : d < 0 ? "text-loom" : "text-muted");
+  const sign = (d) => (d > 0 ? "+" : d < 0 ? "-" : "");
+  const cols = [{ key: "name", label: "Party" }, { key: "prev", label: `Outstanding ${fmtDate(prev.asOn)}` }, { key: "cur", label: `Outstanding ${fmtDate(cur.asOn)}` }, { key: "diff", label: "Change" }, { key: "pctTxt", label: "Change %" }, { key: "kindTxt", label: "Status" }];
+  const kindTxt = { up: "Increased", down: "Reduced", new: "New", cleared: "Cleared", same: "No change" };
+  const exportRows = () => list.map((r) => ({ ...r, pctTxt: r.pct == null ? "" : `${r.pct.toFixed(1)}%`, kindTxt: kindTxt[r.kind] }));
+  const pdf = () => savePdf(`Movement_${prev.asOn}_to_${cur.asOn}.pdf`, {
+    company, title: `Outstanding movement — ${fmtDate(prev.asOn)} to ${fmtDate(cur.asOn)}`, asOn: cur.asOn,
+    kpis: [
+      { label: `Net on ${fmtDate(prev.asOn)}`, value: inr(prev.net) },
+      { label: `Net on ${fmtDate(cur.asOn)}`, value: inr(cur.net) },
+      { label: "Change", value: `${sign(change)}${inr(Math.abs(change))}`, color: change > 0 ? "#B4453A" : "#2F6E5D" },
+      { label: "Parties changed", value: String(data.filter((r) => r.kind !== "same").length) },
+    ],
+    head: ["Party", "Previous", "Current", "Change", "Change %", "Status"],
+    body: list.map((r) => [r.name, formatCurrency(r.prev), formatCurrency(r.cur), `${sign(r.diff)}${formatCurrency(Math.abs(r.diff))}`, r.pct == null ? "–" : `${r.pct.toFixed(1)}%`, kindTxt[r.kind]]),
+    foot: ["TOTAL", formatCurrency(prev.net), formatCurrency(cur.net), `${sign(change)}${formatCurrency(Math.abs(change))}`, "", ""],
+    align: ["left", "right", "right", "right", "right", "center"],
+  });
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2 flex-wrap text-sm">
+        <span className="text-muted">Compare with</span>
+        <select value={idx} onChange={(e) => setIdx(Number(e.target.value))} className="border border-line rounded-lg px-2 py-1.5 text-sm font-semibold bg-white">
+          {hist.map((h, i) => <option key={h.asOn} value={i}>{fmtDate(h.asOn)}</option>)}
+        </select>
+        <span className="text-muted">→ {fmtDate(cur.asOn)}</span>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <Stat icon={Clock} label="Earlier" value={compactINR(prev.net)} sub={fmtDate(prev.asOn)} />
+        <Stat icon={Clock} label="Now" value={compactINR(cur.net)} sub={fmtDate(cur.asOn)} />
+        <Stat icon={change > 0 ? TrendingUp : TrendingDown} label="Change" value={`${sign(change)}${compactINR(Math.abs(change))}`} sub={prev.net ? `${((change / Math.abs(prev.net)) * 100).toFixed(1)}%` : ""} tone={colr(change)} />
+        <Stat icon={Percent} label="Parties changed" value={data.filter((r) => r.kind !== "same").length} sub={`${count("new")} new · ${count("cleared")} cleared`} />
+      </div>
+
+      <div className="bg-panel border border-line rounded-2xl p-4">
+        <div className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">Ageing buckets — then vs now</div>
+        <div className="grid grid-cols-5 gap-2">
+          {BUCKETS.map((b) => {
+            const d = cur.buckets[b.key] - (prev.buckets[b.key] || 0);
+            return (
+              <div key={b.key} className="rounded-xl bg-paper/60 border border-line p-2 text-center" style={{ borderTop: `3px solid ${b.color}` }}>
+                <div className="text-[10px] font-bold" style={{ color: b.color }}>{b.label}d</div>
+                <div className="text-xs font-bold mt-0.5">{compactINR(cur.buckets[b.key])}</div>
+                <div className={`text-[10px] font-semibold ${colr(d)}`}>{d ? `${sign(d)}${compactINR(Math.abs(d))}` : "–"}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <ReportBar title="Party-wise movement" note="Biggest changes first. Red = outstanding went up, green = came down."
+        onExcel={() => exportExcel(`Movement_${prev.asOn}_to_${cur.asOn}.xlsx`, "Movement", exportRows(), cols)} onPdf={pdf} />
+      <div className="flex gap-2 flex-wrap">
+        {kinds.map(([id, label]) => <button key={id} onClick={() => setFlt(id)} className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${flt === id ? "bg-ink text-white border-ink" : "border-line hover:bg-paper"}`}>{label}</button>)}
+      </div>
+      <div className="bg-panel border border-line rounded-2xl overflow-x-auto">
+        <table className="w-full text-sm min-w-[560px]">
+          <thead><tr className="text-[11px] text-muted uppercase tracking-wide border-b border-line bg-paper/60">
+            <th className="text-left px-4 py-3">Party</th><th className="text-right px-3">Earlier</th><th className="text-right px-3">Now</th><th className="text-right px-4">Change</th>
+          </tr></thead>
+          <tbody>
+            {list.map((r) => (
+              <tr key={r.name} className="border-b border-line last:border-0 odd:bg-paper/40">
+                <td className="px-4 py-2.5 font-medium">{r.name} {r.kind === "new" && <span className="text-[10px] font-bold text-thread ml-1">NEW</span>}{r.kind === "cleared" && <span className="text-[10px] font-bold text-loom ml-1">CLEARED</span>}</td>
+                <td className="px-3 text-right text-muted whitespace-nowrap">{r.prev ? formatCurrency(r.prev) : "–"}</td>
+                <td className="px-3 text-right whitespace-nowrap">{r.cur ? formatCurrency(r.cur) : "–"}</td>
+                <td className={`px-4 text-right font-semibold whitespace-nowrap ${colr(r.diff)}`}>{sign(r.diff)}{formatCurrency(Math.abs(r.diff))}{r.pct != null && <span className="text-[10px] ml-1 opacity-70">({r.pct.toFixed(0)}%)</span>}</td>
+              </tr>
+            ))}
+            {!list.length && <tr><td colSpan={4} className="text-center text-muted py-8">Nothing in this group.</td></tr>}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

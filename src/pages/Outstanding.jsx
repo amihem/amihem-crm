@@ -9,7 +9,7 @@ import { useToast } from "../context/ToastContext.jsx";
 import { isSupabaseConfigured } from "../services/supabaseClient";
 import { pullState, pushState, isSetupError, uploadStatement } from "../services/outstandingSync";
 import Modal from "../components/Modal.jsx";
-import { SummaryTab, BillsTab, MonthTab, PriorityTab } from "./outstandingReports.jsx";
+import { SummaryTab, BillsTab, MonthTab, PriorityTab, MovementTab } from "./outstandingReports.jsx";
 import CollectionsTab from "./outstandingCollections.jsx";
 import KpiCard from "../components/KpiCard.jsx";
 import SearchDropdown from "../components/SearchDropdown.jsx";
@@ -26,6 +26,7 @@ import {
   buildStatementMessage, parseOutstandingFile, diffDays, exportExcel,
   loadSnapshot, saveSnapshot, loadLinks, saveLinks, loadSent, saveSent,
   loadSettings, saveSettings, DEFAULT_FOOTER, compactINR, summaryMessage, SOURCES, companyFor, loadCollections, saveCollections,
+  billKey, subGroup, nextHistory,
 } from "../utils/outstanding";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
@@ -35,6 +36,7 @@ const TABS = [
   { id: "bills", label: "Bill-wise Ageing" },
   { id: "month", label: "Month-wise" },
   { id: "priority", label: "Collection Priority" },
+  { id: "movement", label: "Movement" },
   { id: "collections", label: "Collections & Advice" },
 ];
 
@@ -201,6 +203,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
     setBusy(true);
     try {
       const parsed = await parseOutstandingFile(file, source);
+      parsed.history = nextHistory(snapRaw, parsed);
       if (!saveSnapshot(parsed, source)) showToast("Loaded, but couldn't be saved on this device (storage full).", "error");
       saveSent({}, source); setSent({});
       setSnap(parsed);
@@ -227,6 +230,34 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   const updateSettings = (s) => { setSettings(s); saveSettings(s, source); pushCloud({ settings: s }); };
 
   const lockMsg = () => showToast("Back-dated view is for viewing only — set the date back to the report date to send statements.", "info");
+  // ---------- bill-wise selection (which invoices go out on WhatsApp) ----------
+  const [billSel, setBillSel] = useState({}); // partyKey -> [billKey]; absent = every bill
+  const allKeys = (g) => g.bills.map(billKey);
+  const selSet = (g) => new Set(billSel[g.key] || allKeys(g));
+  const effRow = (r) => {
+    if (!billSel[r.g.key]) return r;
+    const g = subGroup(r.g, new Set(billSel[r.g.key]));
+    return { ...r, g, overdue: overdueAmount(g, settings.creditDays) };
+  };
+  const writeSel = (r, set) => {
+    setBillSel((m) => {
+      const n = { ...m };
+      if (set.size === r.g.bills.length) delete n[r.g.key]; else n[r.g.key] = [...set];
+      return n;
+    });
+  };
+  const toggleBill = (r, b) => {
+    const set = selSet(r.g);
+    const k = billKey(b);
+    set.has(k) ? set.delete(k) : set.add(k);
+    writeSel(r, set);
+  };
+  const setBills = (r, mode) => {
+    if (mode === "all") writeSel(r, new Set(allKeys(r.g)));
+    else if (mode === "none") writeSel(r, new Set());
+    else writeSel(r, new Set(r.g.bills.filter((b) => b.outstanding > 0 && b.days > settings.creditDays).map(billKey)));
+  };
+
   // Build the customer's PDF + image, store them online and return the WhatsApp message with both links.
   const makeLinkMessage = async (r) => {
     let pdf, png;
@@ -235,18 +266,35 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       pdf = await ledgerPdfBlob(pages, RANJAN_LOGO);
       png = await canvasToBlob(await ledgerPageCanvas(pages[0], RANJAN_LOGO, 2.2, pages.length === 1));
     } else {
-      const card = renderStatementCanvas(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company });
+      const card = renderStatementCanvas(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, payment: settings.paymentDetails });
       [pdf, png] = await Promise.all([canvasToPdfBlob(card), canvasToBlob(card)]);
     }
     const name = (ext) => statementFileName(r.g, ext).replace("Statement_", source === "ranjan" ? "Outstanding_" : "Statement_");
     const [pu, iu] = await Promise.all([uploadStatement(pdf, name("pdf")), uploadStatement(png, name("png"))]);
     return `${statementCaption(r.g, snap.asOn, company)}\n\nStatement (PDF): ${pu}\nStatement (Image): ${iu}`;
   };
+  // One PDF with a page per customer (selected bills only) — for printing / archiving.
+  const combinedPdf = async (list) => {
+    try {
+      setPrep("Building PDF…");
+      const ranjan = source === "ranjan";
+      const pages = [];
+      list.map(effRow).filter((r) => r.g.bills.length).forEach((r) => pages.push(...buildLedgerPages(r.g, snap, { format: ranjan ? "ranjan" : "generic", company, logo: ranjan })));
+      if (!pages.length) { showToast("Nothing to export.", "error"); return; }
+      downloadBlob(`Outstanding_${source}_${snap.asOn}.pdf`, await ledgerPdfBlob(pages, ranjan ? RANJAN_LOGO : null));
+    } catch (e) {
+      showToast("Couldn't build the PDF.", "error");
+    } finally {
+      setPrep(null);
+    }
+  };
   const linkError = () => showToast("Couldn't create the links — run supabase/outstanding.sql once, then retry.", "error");
 
   // One tap: create PDF + image, then open the customer's own WhatsApp chat with both links ready to send.
-  const quickSend = async (r) => {
+  const quickSend = async (r0) => {
+    const r = effRow(r0);
     if (backdated) { lockMsg(); return; }
+    if (!r.g.bills.length) { showToast("Select at least one bill.", "error"); return; }
     if (!r.phone) { showToast("No phone number linked for this customer.", "error"); return; }
     try {
       setPrep(`Preparing ${r.g.name}…`);
@@ -261,9 +309,10 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
     }
   };
 
-  const startQueue = async (list, opts) => {
+  const startQueue = async (list0, opts) => {
     if (backdated) { lockMsg(); return; }
-    const withPhone = list.filter((r) => r.phone);
+    const list = list0.map(effRow);
+    const withPhone = list.filter((r) => r.phone && r.g.bills.length);
     if (!withPhone.length) { showToast("No phone number available for the selected parties.", "error"); return; }
     if (withPhone.length < list.length) showToast(`${list.length - withPhone.length} skipped — no phone number.`, "info");
     if (opts?.links) {
@@ -283,7 +332,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
     }
     setQueue(withPhone.map((r) => ({
       key: r.g.key, name: r.g.name, phone: r.phone,
-      message: buildStatementMessage(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, ...opts }),
+      message: buildStatementMessage(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, payment: settings.paymentDetails, ...opts }),
     })));
   };
 
@@ -358,7 +407,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       </div>
 
       {tab === "statements" && (
-        <StatementsTab onQuick={quickSend} onStatement={(k) => (backdated ? lockMsg() : setStmtKey(k))} onOpen={setDetailKey} rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
+        <StatementsTab billSel={billSel} selSet={selSet} onBill={toggleBill} onBills={setBills} onCombined={combinedPdf} onQuick={quickSend} onStatement={(k) => (backdated ? lockMsg() : setStmtKey(k))} onOpen={setDetailKey} rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
           onLink={setLinking} onConfirm={(r) => updateLink(r.g.key, { ...(r.link || {}), customerId: r.match.customer.id })}
           showToast={showToast} />
       )}
@@ -368,6 +417,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       {tab === "collections" && source === "ranjan" && (
         <CollectionsTab groups={groupParties(snapRaw.bills)} coll={coll} updateColl={updateColl} company={company} showToast={showToast} />
       )}
+      {tab === "movement" && <MovementTab snap={snapRaw} company={company} />}
       {tab === "priority" && <PriorityTab rows={rows} settings={settings} snap={snap} company={company} startQueue={startQueue} onOpen={setDetailKey} />}
 
       {detailKey && rows.find((r) => r.g.key === detailKey) && (
@@ -377,7 +427,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
           onSend={(r, o) => { setDetailKey(null); startQueue([r], o); }} />
       )}
       {stmtKey && rows.find((r) => r.g.key === stmtKey) && (
-        <StatementModal company={company} source={source} row={rows.find((r) => r.g.key === stmtKey)} snap={snap} settings={settings} onClose={() => setStmtKey(null)} showToast={showToast} />
+        <StatementModal company={company} source={source} row={effRow(rows.find((r) => r.g.key === stmtKey))} snap={snap} settings={settings} onClose={() => setStmtKey(null)} showToast={showToast} />
       )}
       {prep && (
         <div className="fixed inset-x-0 bottom-24 flex justify-center z-50 pointer-events-none">
@@ -419,7 +469,7 @@ function Header({ children }) {
 }
 
 // ---------------- Tab 1: statements ----------------
-function StatementsTab({ onQuick, onStatement, onOpen, rows, sent, settings, snap, startQueue, onLink, onConfirm, showToast }) {
+function StatementsTab({ billSel, selSet, onBill, onBills, onCombined, onQuick, onStatement, onOpen, rows, sent, settings, snap, startQueue, onLink, onConfirm, showToast }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
   const [sel, setSel] = useState(new Set());
@@ -428,7 +478,8 @@ function StatementsTab({ onQuick, onStatement, onOpen, rows, sent, settings, sna
   const [sort, setSort] = useState("amount");
   const [useLinks, setUseLinks] = useState(true);
 
-  const eligible = (r) => r.match.status === "auto" && r.phone && r.g.total > 0;
+  const nSel = (r) => (billSel[r.g.key] ? billSel[r.g.key].length : r.g.bills.length);
+  const eligible = (r) => r.match.status === "auto" && r.phone && r.g.total > 0 && nSel(r) > 0;
   const list0 = rows.filter((r) => {
     if (q && !r.g.name.toLowerCase().includes(q.toLowerCase())) return false;
     if (filter === "pending") return r.g.total > 0 && !sent[r.g.key];
@@ -469,6 +520,7 @@ function StatementsTab({ onQuick, onStatement, onOpen, rows, sent, settings, sna
           className="ml-auto bg-loom text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 disabled:opacity-40">
           <Send size={14} /> Send via WhatsApp ({chosen.length})
         </button>
+        <button disabled={!chosen.length} onClick={() => onCombined(chosen)} className="px-3 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper disabled:opacity-40 flex items-center gap-1.5"><FileText size={14} /> One PDF</button>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
@@ -488,6 +540,7 @@ function StatementsTab({ onQuick, onStatement, onOpen, rows, sent, settings, sna
                   <button onClick={() => onOpen(r.g.key)} className="text-left hover:underline">{r.g.name}</button>
                   {sent[r.g.key] && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Sent</span>}
                   {r.g.total < 0 && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Advance</span>}
+                  {billSel[r.g.key] && <span className="text-[10px] font-semibold text-thread bg-thread/10 px-1.5 py-0.5 rounded">Selected bills</span>}
                 </div>
                 <div className="text-xs text-muted mt-0.5">
                   {r.match.status === "auto" && <>{r.match.customer.name !== r.g.name ? `${r.match.customer.name} · ` : ""}{r.phone || <span className="text-thread font-semibold">No phone</span>}</>}
@@ -503,6 +556,7 @@ function StatementsTab({ onQuick, onStatement, onOpen, rows, sent, settings, sna
               <div className="text-right shrink-0">
                 <div className={`font-display font-bold text-base whitespace-nowrap ${r.g.total < 0 ? "text-loom" : ""}`}>{inr(r.g.total)}</div>
                 {r.g.due > 0 && <div className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-muted">oldest <DaysBadge days={r.g.oldest} /></div>}
+                {billSel[r.g.key] && <div className="text-[11px] font-semibold text-thread mt-0.5 whitespace-nowrap">Send: {inr(r.g.bills.filter((b) => selSet(r.g).has(billKey(b))).reduce((t, b) => t + b.outstanding, 0))}</div>}
               </div>
               <div className="col-span-3 flex items-center justify-end gap-1.5">
                 {(r.match.status !== "auto" || !r.phone) && (
@@ -512,7 +566,7 @@ function StatementsTab({ onQuick, onStatement, onOpen, rows, sent, settings, sna
                 <button disabled={!ok} onClick={() => startQueue([r], opts)} title="Send the statement as a text message" className="p-2 rounded-lg border border-line hover:bg-paper disabled:opacity-30" aria-label="WhatsApp text message"><MessageCircle size={15} /></button>
                 <button disabled={!ok} onClick={() => onQuick(r)} title="Create PDF + image and send on WhatsApp" className="px-3 py-2 rounded-lg bg-loom text-white disabled:opacity-30 flex items-center gap-1.5 text-xs font-semibold" aria-label="Send PDF and image on WhatsApp"><Send size={14} /> PDF + Image</button>
               </div>
-              <BillBars g={r.g} />
+              <BillBars g={r.g} sel={selSet(r.g)} onToggle={(b) => onBill(r, b)} onMode={(m) => onBills(r, m)} />
             </div>
           );
         })}
@@ -522,25 +576,38 @@ function StatementsTab({ onQuick, onStatement, onOpen, rows, sent, settings, sna
   );
 }
 
-function BillBars({ g, limit = 3 }) {
+function BillBars({ g, sel, onToggle, onMode, limit = 3 }) {
   const [all, setAll] = useState(false);
   const bills = [...g.bills].sort((a, b) => a.date.localeCompare(b.date));
   if (!bills.length) return null;
   const max = Math.max(1, ...bills.map((b) => Math.abs(b.outstanding)));
   const shown = all ? bills : bills.slice(0, limit);
+  const picking = !!onToggle;
+  const nSel = picking ? bills.filter((b) => sel.has(billKey(b))).length : bills.length;
+  const selAmt = bills.filter((b) => !picking || sel.has(billKey(b))).reduce((t, b) => t + b.outstanding, 0);
   return (
     <div className="col-span-3 basis-full w-full flex flex-col gap-2 pt-2 border-t border-line/70">
+      {picking && (
+        <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px]">
+          <span className="font-semibold">Bills to send: {nSel}/{bills.length} · {inr(selAmt)}</span>
+          <button onClick={() => onMode("all")} className="text-ink2 font-semibold hover:underline">All</button>
+          <button onClick={() => onMode("overdue")} className="text-ink2 font-semibold hover:underline">Overdue</button>
+          <button onClick={() => onMode("none")} className="text-muted font-semibold hover:underline">None</button>
+        </div>
+      )}
       {shown.map((b, i) => {
         const neg = b.outstanding < 0;
         const color = neg ? "#2F6E5D" : bucketOf(b.days).color;
         const part = !neg && b.credit > 0 && b.amount > 0;
+        const on = !picking || sel.has(billKey(b));
         return (
-          <div key={i} className="flex items-center gap-2 text-[11px]">
-            <div className="w-[82px] shrink-0 leading-tight">
+          <div key={i} className={`flex items-center gap-2 text-[11px] ${on ? "" : "opacity-45"}`}>
+            {picking && <input type="checkbox" className="w-4 h-4 shrink-0" checked={on} onChange={() => onToggle(b)} aria-label={`Include bill ${b.billNo}`} />}
+            <div className="w-[78px] shrink-0 leading-tight">
               <div className="font-semibold truncate">{neg ? (b.billNo && !/advance/i.test(b.billNo) ? b.billNo : "Advance") : b.billNo}</div>
               <div className="text-muted">{fmtDate(b.date).replace(/-(\d{2})(\d{2})$/, "-$2")}</div>
             </div>
-            <div className="w-16 sm:w-24 h-2.5 rounded-full bg-paper overflow-hidden shrink-0">
+            <div className="w-14 sm:w-24 h-2.5 rounded-full bg-paper overflow-hidden shrink-0">
               <div className="h-full rounded-full" style={{ width: `${Math.max(8, (Math.abs(b.outstanding) / max) * 100)}%`, background: color }} />
             </div>
             <div className="flex-1 text-right leading-tight min-w-0">
@@ -570,7 +637,7 @@ function StatementModal({ company, source, row, snap, settings, onClose, showToa
     let dead = false;
     (async () => {
       try {
-        const card = renderStatementCanvas(g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company });
+        const card = renderStatementCanvas(g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, payment: settings.paymentDetails });
         const logo = ranjan ? RANJAN_LOGO : null;
         const pages = buildLedgerPages(g, snap, { format: ranjan ? "ranjan" : "generic", company, logo: !!logo });
         const [cardPng, cardPdf, ledPdf, ledCanvas] = await Promise.all([
@@ -585,7 +652,7 @@ function StatementModal({ company, source, row, snap, settings, onClose, showToa
       }
     })();
     return () => { dead = true; urls.forEach((u) => URL.revokeObjectURL(u)); };
-  }, [g, snap, settings.creditDays, settings.footer, company, ranjan]);
+  }, [g, snap, settings.creditDays, settings.footer, settings.paymentDetails, company, ranjan]);
 
   const cur = files?.[fmt];
   const caption = statementCaption(g, snap.asOn, company);
@@ -797,7 +864,8 @@ function LinkModal({ group, customers, link, onSave, onClose }) {
 function SettingsModal({ open, settings, onSave, onClose }) {
   const [creditDays, setCreditDays] = useState(settings.creditDays);
   const [footer, setFooter] = useState(settings.footer);
-  useEffect(() => { if (open) { setCreditDays(settings.creditDays); setFooter(settings.footer); } }, [open, settings]);
+  const [pay, setPay] = useState(settings.paymentDetails || "");
+  useEffect(() => { if (open) { setCreditDays(settings.creditDays); setFooter(settings.footer); setPay(settings.paymentDetails || ""); } }, [open, settings]);
   return (
     <Modal open={open} onClose={onClose} title="Outstanding settings">
       <div className="flex flex-col gap-4">
@@ -812,9 +880,14 @@ function SettingsModal({ open, settings, onSave, onClose }) {
             className="mt-1 border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
           <button onClick={() => setFooter(DEFAULT_FOOTER)} className="text-xs text-ink2 font-semibold mt-1 hover:underline">Reset to default</button>
         </div>
+        <div>
+          <label className="text-xs font-semibold text-muted uppercase tracking-wide">Payment details (shown on statements)</label>
+          <textarea value={pay} onChange={(e) => setPay(e.target.value)} rows={3} placeholder={"Bank, A/c no., IFSC\nUPI id"}
+            className="mt-1 border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
+        </div>
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper">Cancel</button>
-          <button onClick={() => onSave({ creditDays: Math.max(0, Number(creditDays) || 0), footer })} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
+          <button onClick={() => onSave({ creditDays: Math.max(0, Number(creditDays) || 0), footer, paymentDetails: pay })} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
         </div>
       </div>
     </Modal>
