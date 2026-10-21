@@ -97,7 +97,9 @@ export function renderStatementCanvas(group, asOn, { creditDays = 60, footer = "
   const cards = [
     { label: "NET OUTSTANDING", value: rs(group.total), bg: "#F3F4F6", fg: NAVY },
     { label: `OVERDUE (> ${creditDays} DAYS)`, value: rs(overdue), bg: overdue > 0 ? "#FDECEA" : "#E8F3EE", fg: overdue > 0 ? "#B4453A" : GREEN },
-    group.advance > 0
+    group.advAdj > 0
+      ? { label: "ADVANCE ADJUSTED", value: rs(group.advAdj), bg: "#E8F3EE", fg: GREEN }
+      : group.advance > 0
       ? { label: "ADVANCE / CREDIT", value: rs(group.advance), bg: "#E8F3EE", fg: GREEN }
       : { label: "OLDEST BILL", value: `${group.oldest || 0} days`, bg: "#F3F4F6", fg: NAVY },
   ];
@@ -144,7 +146,7 @@ export function renderStatementCanvas(group, asOn, { creditDays = 60, footer = "
     const color = neg ? GREEN : bucketOf(b.days).color;
     T(ctx, neg ? (b.billNo && !/advance/i.test(b.billNo) ? `Credit · ${b.billNo}` : "Advance / Credit") : `Bill ${b.billNo}`, 48, cy - 4, { size: 26, weight: 700, color: NAVY });
     const late = !neg && b.days > creditDays;
-    const sub = `${short(b.date)}${b.credit > 0 && b.amount > 0 ? ` · rcvd ${rs(b.credit)}` : ""}`;
+    const sub = `${short(b.date)}${b.adj > 0 ? ` · adv adj ${rs(b.adj)}` : b.credit > 0 && b.amount > 0 ? ` · rcvd ${rs(b.credit)}` : ""}`;
     T(ctx, sub, 48, cy + 24, { size: 18, color: GRAY });
     if (late) {
       ctx.font = `400 18px ${FONT}`;

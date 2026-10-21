@@ -30,6 +30,12 @@ export async function buildReportPdf(o) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10);
     doc.text(`As on ${fmtDate(o.asOn)}`, W - M, 28, { align: "right" });
+    if (o.note) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.5);
+      doc.setTextColor(174, 184, 204);
+      doc.text(`Filter: ${o.note}`, W - M, 46, { align: "right" });
+    }
   };
 
   let y = 82;

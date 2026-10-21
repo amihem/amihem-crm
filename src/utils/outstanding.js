@@ -57,7 +57,7 @@ export const saveLinks = (l, source) => write(kk(K_LINKS, source), l);
 export const loadSent = (source) => read(kk(K_SENT, source), {});
 export const saveSent = (s, source) => write(kk(K_SENT, source), s);
 export const DEFAULT_FOOTER = "Kindly arrange the payment at the earliest. Please ignore if already paid.";
-export const loadSettings = (source) => ({ creditDays: 60, footer: DEFAULT_FOOTER, paymentDetails: "", ...read(kk(K_SET, source), {}) });
+export const loadSettings = (source) => ({ creditDays: 60, footer: DEFAULT_FOOTER, paymentDetails: "", fifoAdvance: true, ...read(kk(K_SET, source), {}) });
 export const saveSettings = (s, source) => write(kk(K_SET, source), s);
 
 // Collections recorded against the outstanding + payment advices issued to the supplier.
@@ -392,18 +392,56 @@ export function groupParties(bills) {
 export const overdueAmount = (g, creditDays) =>
   g.bills.reduce((s, b) => (b.outstanding > 0 && b.days > creditDays ? s + b.outstanding : s), 0);
 
+// ---------- advance / receipts adjusted against the oldest bills (FIFO) ----------
+// Credit balances (advance, unadjusted receipts) of a party are set off against that
+// party's oldest pending bills first. Fully cleared bills drop out; part-cleared bills
+// keep the balance and show the adjusted amount (adj) as credit. Totals stay the same,
+// ageing improves. info[party] = { adjusted, settled, remaining, refs }.
+export function applyFifo(bills) {
+  const by = new Map();
+  bills.forEach((b) => { if (!by.has(b.party)) by.set(b.party, []); by.get(b.party).push(b); });
+  const out = [];
+  const info = {};
+  by.forEach((list, party) => {
+    const adv = list.filter((b) => b.outstanding < 0);
+    if (!adv.length) { out.push(...list); return; }
+    let pool = adv.reduce((t, b) => t - b.outstanding, 0);
+    const startPool = pool;
+    let settled = 0;
+    const kept = new Map();
+    list.filter((b) => b.outstanding > 0).sort((a, b) => a.date.localeCompare(b.date)).forEach((b) => {
+      if (pool <= 0.004) { kept.set(b, b); return; }
+      const take = Math.min(pool, b.outstanding);
+      pool -= take;
+      const net = Math.round((b.outstanding - take) * 100) / 100;
+      if (net <= 0.004) settled++; else kept.set(b, { ...b, outstanding: net, credit: (b.credit || 0) + take, adj: take });
+    });
+    let advDone = false;
+    list.forEach((b) => {
+      if (b.outstanding > 0) { if (kept.has(b)) out.push(kept.get(b)); return; }
+      if (!advDone && pool > 0.004) { out.push({ ...b, outstanding: -Math.round(pool * 100) / 100 }); advDone = true; }
+    });
+    info[party] = { adjusted: Math.round((startPool - Math.max(pool, 0)) * 100) / 100, settled, remaining: Math.max(pool, 0), refs: adv.map((b) => b.billNo) };
+  });
+  return { bills: out, info };
+}
+export function fifoSnapshot(snap) {
+  const r = applyFifo(snap.bills);
+  return { ...snap, bills: r.bills, fifo: r.info };
+}
+
 // ---------- bill-wise selection ----------
 export const billKey = (b) => `${b.billNo}|${b.date}|${b.outstanding}`;
 // A group that only contains the chosen bills (keys = Set of billKey), totals recomputed.
 export function subGroup(g, keys) {
   const sub = groupParties(g.bills.filter((b) => keys.has(billKey(b))))[0];
-  if (sub) return { ...sub, key: g.key, name: g.name };
+  if (sub) return { ...sub, key: g.key, name: g.name, advAdj: g.advAdj, advRefs: g.advRefs };
   return { ...g, bills: [], total: 0, due: 0, advance: 0, oldest: 0, buckets: Object.fromEntries(BUCKETS.map((k) => [k.key, 0])) };
 }
 
 // ---------- history (compare with earlier uploads) ----------
-export function summarizeSnapshot(snap) {
-  const gs = groupParties(snap.bills);
+export function summarizeSnapshot(snap, fifo = true) {
+  const gs = groupParties(fifo ? applyFifo(snap.bills).bills : snap.bills);
   return {
     asOn: snap.asOn,
     net: gs.reduce((t, g) => t + g.total, 0),
@@ -458,6 +496,71 @@ export function matchParty(group, customers, links) {
   return { status: "none" };
 }
 
+// typo-tolerant name similarity: share of tokens that have a close match (RISHAV ~ RISHAB)
+function lev(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+function fuzzy(na, nb) {
+  const A = na.split(" ").filter(Boolean);
+  const B = nb.split(" ").filter(Boolean);
+  if (!A.length || !B.length) return 0;
+  const [small, big] = A.length <= B.length ? [A, B] : [B, A];
+  let hit = 0;
+  small.forEach((t) => { if (big.some((u) => 1 - lev(t, u) / Math.max(t.length, u.length) >= 0.7)) hit++; });
+  return hit / big.length;
+}
+
+// find a party in `groups` for a free-typed name (collections, advices)
+export function pickGroup(groups, name) {
+  const n = normName(name);
+  if (!n) return null;
+  const hit = groups.find((x) => normName(x.name) === n) || groups.find((x) => normName(x.name).replace(/ /g, "") === n.replace(/ /g, ""));
+  if (hit) return hit;
+  let best = null;
+  let sc = 0;
+  const nt = tokens(n);
+  void nt;
+  groups.forEach((x) => { const v = fuzzy(n, normName(x.name)); if (v > sc) { sc = v; best = x; } });
+  return sc >= 0.6 ? best : null;
+}
+
+// Has the supplier credited a collected payment in the (raw, un-adjusted) ledger yet?
+// credited = a receipt / credit of the same amount exists, or every listed invoice is cleared.
+export function creditStatus(entry, rawGroups) {
+  if (entry.credited) return { status: "credited", manual: true };
+  const g = pickGroup(rawGroups, entry.party);
+  if (!g) return { status: "unknown" };
+  const amts = [];
+  g.bills.forEach((b) => {
+    if (b.credit > 0) amts.push({ ref: b.billNo, amount: b.credit });
+    if (b.outstanding < 0) amts.push({ ref: b.billNo, amount: -b.outstanding });
+  });
+  const near = (a, v) => Math.abs(a - v) <= 1;
+  const hit = amts.find((a) => near(a.amount, entry.amount)) || amts.find((a) => near(a.amount, entry.amount + (entry.cd || 0)));
+  if (hit) return { status: "credited", ref: hit.ref };
+  const inv = String(entry.invoices || "").split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
+  if (inv.length) {
+    const pending = new Set(g.bills.filter((b) => b.outstanding > 0).map((b) => shortInv(b.billNo)));
+    if (inv.every((i) => !pending.has(i))) return { status: "verify" }; // invoices no longer / never in the ledger — check by hand
+  }
+  return { status: "pending" };
+}
+
+// account that has never been credited with any payment (no part-payment on any bill, no receipt)
+export const hasNoPayment = (g) => g.bills.length > 0 && g.bills.every((b) => !(b.credit > 0) && b.outstanding > 0);
+
+// simple credit-risk rating: age of the oldest bill, overdue share, never paid
+export function riskOf(g, overdue, creditDays) {
+  let sc = 0;
+  if (g.oldest > 180) sc += 3; else if (g.oldest > 90) sc += 2; else if (g.oldest > creditDays) sc += 1;
+  if (g.due > 0 && overdue / g.due > 0.7) sc += 1;
+  if (hasNoPayment(g) && g.oldest > creditDays) sc += 1;
+  return sc >= 4 ? "High" : sc >= 2 ? "Medium" : "Low";
+}
+
 export const resolvePhone = (match, link) => link?.phone || match.customer?.phone || "";
 
 // ---------- WhatsApp message ----------
@@ -478,6 +581,7 @@ export function buildStatementMessage(group, asOn, opts = {}) {
     ? `Following bills are overdue (beyond ${creditDays} days) as on *${fmtDate(asOn)}*:`
     : `Outstanding statement as on *${fmtDate(asOn)}*:`, "", ...lines, ""];
 
+  if (!onlyOverdue && group.advAdj > 0) out.push(`Advance adjusted (oldest bills first): ${rs(group.advAdj)}`);
   if (!onlyOverdue && group.advance > 0) {
     out.push(`Less: Advance / Credit ${rs(group.advance)}`);
     out.push(`*Net Outstanding: ${rs(total - group.advance)}*`);
