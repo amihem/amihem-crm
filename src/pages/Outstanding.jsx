@@ -11,6 +11,8 @@ import { pullState, pushState, isSetupError, uploadStatement } from "../services
 import Modal from "../components/Modal.jsx";
 import { SummaryTab, BillsTab, MonthTab, PriorityTab, MovementTab } from "./outstandingReports.jsx";
 import CollectionsTab from "./outstandingCollections.jsx";
+import TrackerTab from "./outstandingTracker.jsx";
+import ReportFilters, { EMPTY_FILTERS, applyFilters, filterNote, filtersActive } from "./outstandingFilters.jsx";
 import KpiCard from "../components/KpiCard.jsx";
 import SearchDropdown from "../components/SearchDropdown.jsx";
 import { buildWhatsAppLink } from "../services/whatsapp";
@@ -26,7 +28,7 @@ import {
   buildStatementMessage, parseOutstandingFile, diffDays, exportExcel,
   loadSnapshot, saveSnapshot, loadLinks, saveLinks, loadSent, saveSent,
   loadSettings, saveSettings, DEFAULT_FOOTER, compactINR, summaryMessage, SOURCES, companyFor, loadCollections, saveCollections,
-  billKey, subGroup, nextHistory,
+  billKey, subGroup, nextHistory, fifoSnapshot, riskOf,
 } from "../utils/outstanding";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
@@ -37,6 +39,7 @@ const TABS = [
   { id: "month", label: "Month-wise" },
   { id: "priority", label: "Collection Priority" },
   { id: "movement", label: "Movement" },
+  { id: "tracker", label: "Payment Tracker" },
   { id: "collections", label: "Collections & Advice" },
 ];
 
@@ -93,7 +96,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   // Back-dated view: bills after the chosen date are dropped and ageing is recounted
   // from that date. Amounts stay as per the uploaded report (later payments are not undone).
   const backdated = !!(snapRaw && asOnPick && asOnPick < snapRaw.asOn);
-  const snap = useMemo(() => {
+  const snapBase = useMemo(() => {
     if (!snapRaw || !backdated) return snapRaw;
     return {
       ...snapRaw,
@@ -104,6 +107,10 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   const [links, setLinks] = useState(() => loadLinks(source));
   const [sent, setSent] = useState(() => loadSent(source));
   const [settings, setSettings] = useState(() => loadSettings(source));
+  // Advance / receipts are set off against each customer's oldest bills first (FIFO).
+  const snap = useMemo(() => (snapBase && settings.fifoAdvance !== false ? fifoSnapshot(snapBase) : snapBase), [snapBase, settings.fifoAdvance]);
+  const rawGroups = useMemo(() => (snapBase ? groupParties(snapBase.bills) : []), [snapBase]);
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [tab, setTab] = useState("statements");
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState(false);
@@ -177,9 +184,11 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       groups.map((g) => {
         const link = links[g.key];
         const match = matchParty(g, customers, links);
-        return { g, match, link, phone: resolvePhone(match, link), overdue: overdueAmount(g, settings.creditDays) };
+        const fi = snap?.fifo?.[g.name];
+        const gg = fi ? { ...g, advAdj: fi.adjusted, advRefs: fi.refs } : g;
+        return { g: gg, match, link, phone: resolvePhone(match, link), overdue: overdueAmount(gg, settings.creditDays) };
       }),
-    [groups, customers, links, settings.creditDays]
+    [groups, customers, links, settings.creditDays, snap]
   );
 
   const totals = useMemo(() => {
@@ -190,6 +199,21 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
     });
     return t;
   }, [rows]);
+
+  // report tabs work on the filtered parties
+  const rowsF = useMemo(() => applyFilters(rows, filters), [rows, filters]);
+  const namesF = useMemo(() => new Set(rowsF.map((r) => r.g.name)), [rowsF]);
+  const snapF = useMemo(() => (snap && filtersActive(filters) ? { ...snap, bills: snap.bills.filter((b) => namesF.has(b.party)) } : snap), [snap, filters, namesF]);
+  const totalsF = useMemo(() => {
+    const t = { net: 0, due: 0, advance: 0, overdue: 0, buckets: Object.fromEntries(BUCKETS.map((b) => [b.key, 0])) };
+    rowsF.forEach(({ g, overdue }) => {
+      t.net += g.total; t.due += g.due; t.advance += g.advance; t.overdue += overdue;
+      BUCKETS.forEach((b) => (t.buckets[b.key] += g.buckets[b.key]));
+    });
+    return t;
+  }, [rowsF]);
+  const fNote = filterNote(filters);
+  const REPORT_TABS = ["summary", "bills", "month", "priority", "tracker"];
 
   const shareSummary = async () => {
     const text = summaryMessage(rows, totals, snap.asOn, settings.creditDays, company);
@@ -411,14 +435,20 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
           onLink={setLinking} onConfirm={(r) => updateLink(r.g.key, { ...(r.link || {}), customerId: r.match.customer.id })}
           showToast={showToast} />
       )}
-      {tab === "summary" && <SummaryTab rows={rows} totals={totals} snap={snap} settings={settings} company={company} onOpen={setDetailKey} />}
-      {tab === "bills" && <BillsTab snap={snap} settings={settings} company={company} />}
-      {tab === "month" && <MonthTab snap={snap} settings={settings} company={company} />}
+      {REPORT_TABS.includes(tab) && (
+        <ReportFilters names={rows.map((r) => r.g.name).sort((a, b) => a.localeCompare(b))} value={filters} onChange={setFilters} shown={rowsF.length} total={rows.length} />
+      )}
+      {tab === "summary" && <SummaryTab rows={rowsF} totals={totalsF} snap={snapF} settings={settings} company={company} filterNote={fNote} onOpen={setDetailKey} />}
+      {tab === "bills" && <BillsTab snap={snapF} settings={settings} company={company} filterNote={fNote} />}
+      {tab === "month" && <MonthTab snap={snapF} settings={settings} company={company} filterNote={fNote} />}
       {tab === "collections" && source === "ranjan" && (
         <CollectionsTab groups={groupParties(snapRaw.bills)} coll={coll} updateColl={updateColl} company={company} showToast={showToast} />
       )}
       {tab === "movement" && <MovementTab snap={snapRaw} company={company} />}
-      {tab === "priority" && <PriorityTab rows={rows} settings={settings} snap={snap} company={company} startQueue={startQueue} onOpen={setDetailKey} />}
+      {tab === "tracker" && (
+        <TrackerTab rows={rowsF} rawGroups={rawGroups} coll={coll} updateColl={updateColl} settings={settings} company={company} snap={snap} showToast={showToast} onOpen={setDetailKey} />
+      )}
+      {tab === "priority" && <PriorityTab rows={rowsF} settings={settings} snap={snapF} company={company} filterNote={fNote} startQueue={startQueue} onOpen={setDetailKey} />}
 
       {detailKey && rows.find((r) => r.g.key === detailKey) && (
         <PartyDetail row={rows.find((r) => r.g.key === detailKey)} settings={settings} snap={snap}
@@ -541,6 +571,7 @@ function StatementsTab({ billSel, selSet, onBill, onBills, onCombined, onQuick, 
                   {sent[r.g.key] && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Sent</span>}
                   {r.g.total < 0 && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Advance</span>}
                   {billSel[r.g.key] && <span className="text-[10px] font-semibold text-thread bg-thread/10 px-1.5 py-0.5 rounded">Selected bills</span>}
+                  {r.g.advAdj > 0 && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Advance {inr(r.g.advAdj)} adjusted</span>}
                 </div>
                 <div className="text-xs text-muted mt-0.5">
                   {r.match.status === "auto" && <>{r.match.customer.name !== r.g.name ? `${r.match.customer.name} · ` : ""}{r.phone || <span className="text-thread font-semibold">No phone</span>}</>}
@@ -865,7 +896,8 @@ function SettingsModal({ open, settings, onSave, onClose }) {
   const [creditDays, setCreditDays] = useState(settings.creditDays);
   const [footer, setFooter] = useState(settings.footer);
   const [pay, setPay] = useState(settings.paymentDetails || "");
-  useEffect(() => { if (open) { setCreditDays(settings.creditDays); setFooter(settings.footer); setPay(settings.paymentDetails || ""); } }, [open, settings]);
+  const [fifo, setFifo] = useState(settings.fifoAdvance !== false);
+  useEffect(() => { if (open) { setCreditDays(settings.creditDays); setFooter(settings.footer); setPay(settings.paymentDetails || ""); setFifo(settings.fifoAdvance !== false); } }, [open, settings]);
   return (
     <Modal open={open} onClose={onClose} title="Outstanding settings">
       <div className="flex flex-col gap-4">
@@ -880,6 +912,10 @@ function SettingsModal({ open, settings, onSave, onClose }) {
             className="mt-1 border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
           <button onClick={() => setFooter(DEFAULT_FOOTER)} className="text-xs text-ink2 font-semibold mt-1 hover:underline">Reset to default</button>
         </div>
+        <label className="flex items-start gap-2.5 text-sm cursor-pointer">
+          <input type="checkbox" className="w-4 h-4 mt-0.5" checked={fifo} onChange={(e) => setFifo(e.target.checked)} />
+          <span><b>Adjust advance / receipts on FIFO basis</b><br /><span className="text-xs text-muted">Each customer's advance is set off against their oldest bills first, in every view, statement and report.</span></span>
+        </label>
         <div>
           <label className="text-xs font-semibold text-muted uppercase tracking-wide">Payment details (shown on statements)</label>
           <textarea value={pay} onChange={(e) => setPay(e.target.value)} rows={3} placeholder={"Bank, A/c no., IFSC\nUPI id"}
@@ -887,7 +923,7 @@ function SettingsModal({ open, settings, onSave, onClose }) {
         </div>
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper">Cancel</button>
-          <button onClick={() => onSave({ creditDays: Math.max(0, Number(creditDays) || 0), footer, paymentDetails: pay })} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
+          <button onClick={() => onSave({ creditDays: Math.max(0, Number(creditDays) || 0), footer, paymentDetails: pay, fifoAdvance: fifo })} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
         </div>
       </div>
     </Modal>

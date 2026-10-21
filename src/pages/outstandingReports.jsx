@@ -7,7 +7,7 @@ import { Search, Download, Phone, MessageCircle, Clock, AlertTriangle, Hourglass
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from "recharts";
 import { useToast } from "../context/ToastContext.jsx";
 import { formatCurrency, downloadBlob } from "../utils/helpers";
-import { BUCKETS, bucketOf, fmtDate, compactINR, exportExcel, summarizeSnapshot } from "../utils/outstanding";
+import { BUCKETS, bucketOf, fmtDate, compactINR, exportExcel, summarizeSnapshot, riskOf } from "../utils/outstanding";
 import { buildReportPdf } from "../utils/reportPdf";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
@@ -15,12 +15,17 @@ const money = (n) => (n ? formatCurrency(n) : "–");
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const BUCKET_COLORS = Object.fromEntries(BUCKETS.map((b, i) => [i, b.color]));
 
-function DaysBadge({ days }) {
+export function DaysBadge({ days }) {
   const b = bucketOf(days);
   return <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: `${b.color}1F`, color: b.color }}>{days}d</span>;
 }
 
-function Stat({ icon: Icon, label, value, sub, tone = "text-ink" }) {
+export function RiskBadge({ level }) {
+  const c = level === "High" ? ["#B4453A", "#B4453A1F"] : level === "Medium" ? ["#C9862D", "#C9862D1F"] : ["#2F6E5D", "#2F6E5D1F"];
+  return <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ color: c[0], background: c[1] }}>{level} risk</span>;
+}
+
+export function Stat({ icon: Icon, label, value, sub, tone = "text-ink" }) {
   return (
     <div className="bg-panel border border-line rounded-xl p-3.5">
       <div className="flex items-center gap-1.5 text-[11px] font-semibold text-muted uppercase tracking-wide"><Icon size={13} />{label}</div>
@@ -30,7 +35,7 @@ function Stat({ icon: Icon, label, value, sub, tone = "text-ink" }) {
   );
 }
 
-function ReportBar({ title, note, onExcel, onPdf }) {
+export function ReportBar({ title, note, onExcel, onPdf }) {
   const showToast = useToast();
   const run = (fn) => async () => { try { await fn(); } catch { showToast("Export failed — please try again.", "error"); } };
   return (
@@ -47,7 +52,7 @@ function ReportBar({ title, note, onExcel, onPdf }) {
   );
 }
 
-const savePdf = async (file, opts) => downloadBlob(file, await buildReportPdf(opts));
+export const savePdf = async (file, opts) => downloadBlob(file, await buildReportPdf(opts));
 
 function weightedAge(bills) {
   let w = 0, t = 0;
@@ -56,12 +61,13 @@ function weightedAge(bills) {
 }
 
 // ======================= Ageing Summary =======================
-export function SummaryTab({ rows, totals, snap, settings, company, onOpen }) {
+export function SummaryTab({ rows, totals, snap, settings, company, filterNote, onOpen }) {
   const [sort, setSort] = useState({ key: "total", dir: -1 });
   const [bk, setBk] = useState(null); // clicked ageing bucket
   const dueSum = BUCKETS.reduce((s, b) => s + totals.buckets[b.key], 0) || 1;
   const posBills = snap.bills.filter((b) => b.outstanding > 0);
   const oldest = posBills.reduce((m, b) => (b.days > (m?.days ?? -1) ? b : m), null);
+  const atRisk = posBills.filter((b) => b.days > 180).reduce((t, b) => t + b.outstanding, 0);
   const top5 = [...rows].sort((a, b) => b.g.due - a.g.due).slice(0, 5).reduce((s, r) => s + r.g.due, 0);
   const val = (g, k) => (k === "name" ? g.name : k === "total" ? g.total : k === "advance" ? g.advance : k === "oldest" ? g.oldest : g.buckets[k]);
   const sorted = [...rows].sort((a, b) => {
@@ -78,7 +84,7 @@ export function SummaryTab({ rows, totals, snap, settings, company, onOpen }) {
   const exportData = () => sorted.map(({ g }, i) => ({ n: i + 1, party: g.name, ...Object.fromEntries(BUCKETS.map((b) => [b.key, g.buckets[b.key]])), advance: g.advance ? -g.advance : 0, total: g.total, oldest: g.oldest }));
   const cols = [{ key: "n", label: "#" }, { key: "party", label: "Party" }, ...BUCKETS.map((b) => ({ key: b.key, label: `${b.label} days` })), { key: "advance", label: "Advance" }, { key: "total", label: "Net Outstanding" }, { key: "oldest", label: "Oldest (days)" }];
   const pdf = () => savePdf(`Ageing_Summary_${snap.asOn}.pdf`, {
-    company, title: "Ageing Summary — party wise", asOn: snap.asOn, landscape: true,
+    company, note: filterNote, title: "Ageing Summary — party wise", asOn: snap.asOn, landscape: true,
     kpis: [
       { label: "Net outstanding", value: inr(totals.net) },
       { label: `Overdue > ${settings.creditDays} days`, value: inr(totals.overdue), color: "#B4453A" },
@@ -99,8 +105,9 @@ export function SummaryTab({ rows, totals, snap, settings, company, onOpen }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <Stat icon={Hourglass} label="Avg. age" value={`${weightedAge(snap.bills)} days`} sub="weighted by amount" />
+        <Stat icon={AlertTriangle} label="At risk > 180d" value={compactINR(atRisk)} sub={`${totals.due ? Math.round((atRisk / totals.due) * 100) : 0}% of dues`} tone="text-rust" />
         <Stat icon={Percent} label="Overdue share" value={`${totals.due ? Math.round((totals.overdue / totals.due) * 100) : 0}%`} sub={`beyond ${settings.creditDays} days`} tone="text-rust" />
         <Stat icon={Clock} label="Oldest bill" value={oldest ? `${oldest.days} days` : "–"} sub={oldest?.party} />
         <Stat icon={Trophy} label="Top 5 parties" value={`${totals.due ? Math.round((top5 / totals.due) * 100) : 0}%`} sub="of total dues" />
@@ -230,7 +237,7 @@ export function BillsTab({ snap, settings, company }) {
     { key: "amount", label: "Bill Amount" }, { key: "credit", label: "Received" }, { key: "outstanding", label: "Outstanding" }, { key: "days", label: "Ageing Days" },
   ];
   const pdf = () => savePdf(`Billwise_Ageing_${snap.asOn}.pdf`, {
-    company, title: `Bill-wise ageing${bucket !== "all" ? ` — ${BUCKETS.find((b) => b.key === bucket).label} days` : ""}`, asOn: snap.asOn,
+    company, note: filterNote, title: `Bill-wise ageing${bucket !== "all" ? ` — ${BUCKETS.find((b) => b.key === bucket).label} days` : ""}`, asOn: snap.asOn,
     kpis: [
       { label: "Bills", value: String(list.length) },
       { label: "Outstanding", value: inr(total) },
@@ -318,7 +325,7 @@ export function MonthTab({ snap, settings, company }) {
   const total = data.reduce((s, r) => s + r.amount, 0);
   const cols = [{ key: "label", label: "Invoice month" }, { key: "bills", label: "Bills" }, { key: "parties", label: "Parties" }, { key: "amount", label: "Outstanding" }, { key: "sharePct", label: "% of dues" }, { key: "avg", label: "Avg age (days)" }];
   const pdf = () => savePdf(`Monthwise_Outstanding_${snap.asOn}.pdf`, {
-    company, title: "Month-wise outstanding (by invoice month)", asOn: snap.asOn,
+    company, note: filterNote, title: "Month-wise outstanding (by invoice month)", asOn: snap.asOn,
     kpis: [{ label: "Outstanding", value: inr(total) }, { label: "Months", value: String(data.length) }, { label: "Bills", value: String(data.reduce((s, r) => s + r.bills, 0)) }, { label: "Avg. age", value: `${weightedAge(snap.bills)} days` }],
     head: ["Invoice month", "Bills", "Parties", "Outstanding", "% of dues", "Avg age (days)"],
     body: data.map((r) => [r.label, r.bills, r.parties, formatCurrency(r.amount), `${r.share.toFixed(1)}%`, r.avg]),
@@ -372,7 +379,7 @@ export function MonthTab({ snap, settings, company }) {
 }
 
 // ======================= Collection Priority =======================
-export function PriorityTab({ rows, settings, snap, company, startQueue, onOpen }) {
+export function PriorityTab({ rows, settings, snap, company, filterNote, startQueue, onOpen }) {
   const list = rows.filter((r) => r.overdue > 0).sort((a, b) => b.overdue - a.overdue);
   const max = list[0]?.overdue || 1;
   const sendable = list.filter((r) => r.match.status === "auto" && r.phone);
@@ -381,7 +388,7 @@ export function PriorityTab({ rows, settings, snap, company, startQueue, onOpen 
   const cols = [{ key: "n", label: "#" }, { key: "party", label: "Party" }, { key: "bills", label: "Overdue bills" }, { key: "overdue", label: "Overdue amount" }, { key: "due", label: "Total dues" }, { key: "pct", label: "% overdue" }, { key: "oldest", label: "Oldest (days)" }, { key: "phone", label: "Phone" }];
   const data = () => list.map((r, i) => ({ n: i + 1, party: r.g.name, bills: overdueBills(r), overdue: r.overdue, due: r.g.due, pct: Math.round((r.overdue / r.g.due) * 100), oldest: r.g.oldest, phone: r.phone || "" }));
   const pdf = () => savePdf(`Collection_Priority_${snap.asOn}.pdf`, {
-    company, title: `Collection priority — overdue beyond ${settings.creditDays} days`, asOn: snap.asOn,
+    company, note: filterNote, title: `Collection priority — overdue beyond ${settings.creditDays} days`, asOn: snap.asOn,
     kpis: [{ label: "Parties overdue", value: String(list.length) }, { label: "Overdue amount", value: inr(overdueTotal), color: "#B4453A" }, { label: "Overdue bills", value: String(list.reduce((s, r) => s + overdueBills(r), 0)) }, { label: "Oldest bill", value: `${Math.max(0, ...list.map((r) => r.g.oldest))} days` }],
     head: ["#", "Party", "Overdue bills", "Overdue amount", "Total dues", "% overdue", "Oldest (d)", "Phone"],
     body: data().map((d) => [d.n, d.party, d.bills, formatCurrency(d.overdue), formatCurrency(d.due), `${d.pct}%`, d.oldest, d.phone || "–"]),
@@ -414,7 +421,7 @@ export function PriorityTab({ rows, settings, snap, company, startQueue, onOpen 
               <div className="min-w-0">
                 <button onClick={() => onOpen(r.g.key)} className="font-semibold text-sm text-left hover:underline leading-snug">{r.g.name}</button>
                 <div className="text-xs text-muted mt-1 flex items-center gap-1.5 flex-wrap">
-                  <span>{ob} overdue bill{ob > 1 ? "s" : ""}</span><span>·</span><span className="flex items-center gap-1">oldest <DaysBadge days={r.g.oldest} /></span>
+                  <span>{ob} overdue bill{ob > 1 ? "s" : ""}</span><span>·</span><span className="flex items-center gap-1">oldest <DaysBadge days={r.g.oldest} /></span><RiskBadge level={riskOf(r.g, r.overdue, settings.creditDays)} />
                 </div>
                 <div className="text-xs text-muted mt-1">Total dues <b className="text-ink">{inr(r.g.due)}</b></div>
               </div>
@@ -441,7 +448,7 @@ export function PriorityTab({ rows, settings, snap, company, startQueue, onOpen 
 
 
 // ======================= Movement vs an earlier report =======================
-export function MovementTab({ snap, company }) {
+export function MovementTab({ snap, company, filterNote }) {
   const hist = snap.history || [];
   const [idx, setIdx] = useState(Math.max(0, hist.length - 1));
   const [flt, setFlt] = useState("all");
@@ -477,7 +484,7 @@ export function MovementTab({ snap, company }) {
   const kindTxt = { up: "Increased", down: "Reduced", new: "New", cleared: "Cleared", same: "No change" };
   const exportRows = () => list.map((r) => ({ ...r, pctTxt: r.pct == null ? "" : `${r.pct.toFixed(1)}%`, kindTxt: kindTxt[r.kind] }));
   const pdf = () => savePdf(`Movement_${prev.asOn}_to_${cur.asOn}.pdf`, {
-    company, title: `Outstanding movement — ${fmtDate(prev.asOn)} to ${fmtDate(cur.asOn)}`, asOn: cur.asOn,
+    company, note: filterNote, title: `Outstanding movement — ${fmtDate(prev.asOn)} to ${fmtDate(cur.asOn)}`, asOn: cur.asOn,
     kpis: [
       { label: `Net on ${fmtDate(prev.asOn)}`, value: inr(prev.net) },
       { label: `Net on ${fmtDate(cur.asOn)}`, value: inr(cur.net) },
