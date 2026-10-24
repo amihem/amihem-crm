@@ -10,6 +10,7 @@ import { isSupabaseConfigured } from "../services/supabaseClient";
 import { pullState, pushState, isSetupError, uploadStatement } from "../services/outstandingSync";
 import Modal from "../components/Modal.jsx";
 import { SummaryTab, BillsTab, MonthTab, PriorityTab, MovementTab } from "./outstandingReports.jsx";
+import DrillModal from "./outstandingDrill.jsx";
 import CollectionsTab from "./outstandingCollections.jsx";
 import TrackerTab from "./outstandingTracker.jsx";
 import ReportFilters, { EMPTY_FILTERS, applyFilters, filterNote, filtersActive } from "./outstandingFilters.jsx";
@@ -119,6 +120,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   const [linking, setLinking] = useState(null); // group being linked
   const [showSettings, setShowSettings] = useState(false);
   const [detailKey, setDetailKey] = useState(null);
+  const [drill, setDrill] = useState(null); // { title, bills } — bill-wise popup opened from report amounts
   const [stmtKey, setStmtKey] = useState(null);
   const [prep, setPrep] = useState(null);
   const company = companyFor(source, snap);
@@ -422,7 +424,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
         <KpiCard label="Not linked to master" value={unmatched} tone={unmatched ? "thread" : "loom"} icon={Users} sub={unmatched ? "link before sending" : "all matched"} />
       </div>
 
-      <FYOutstandingCard bills={snap.bills} asOn={snap.asOn} />
+      <FYOutstandingCard bills={snap.bills} asOn={snap.asOn} onDrill={setDrill} />
 
       <div className="flex gap-1 overflow-x-auto border-b border-line">
         {TABS.filter((t) => t.id !== "collections" || source === "ranjan").map((t) => (
@@ -442,17 +444,18 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
         <ReportFilters names={rows.map((r) => r.g.name).sort((a, b) => a.localeCompare(b))} value={filters} onChange={setFilters} shown={rowsF.length} total={rows.length} />
       )}
       {tab === "summary" && <SummaryTab rows={rowsF} totals={totalsF} snap={snapF} settings={settings} company={company} filterNote={fNote} onOpen={setDetailKey} />}
-      {tab === "bills" && <BillsTab snap={snapF} settings={settings} company={company} filterNote={fNote} />}
-      {tab === "month" && <MonthTab snap={snapF} settings={settings} company={company} filterNote={fNote} />}
+      {tab === "bills" && <BillsTab snap={snapF} settings={settings} company={company} filterNote={fNote} onOpen={setDetailKey} />}
+      {tab === "month" && <MonthTab snap={snapF} settings={settings} company={company} filterNote={fNote} onDrill={setDrill} />}
       {tab === "collections" && source === "ranjan" && (
         <CollectionsTab groups={groupParties(snapRaw.bills)} coll={coll} updateColl={updateColl} company={company} showToast={showToast} />
       )}
-      {tab === "movement" && <MovementTab snap={snapRaw} company={company} />}
+      {tab === "movement" && <MovementTab snap={snapRaw} company={company} filterNote={fNote} onOpen={setDetailKey} />}
       {tab === "tracker" && (
         <TrackerTab rows={rowsF} rawGroups={rawGroups} coll={coll} updateColl={updateColl} settings={settings} company={company} snap={snap} showToast={showToast} onOpen={setDetailKey} />
       )}
       {tab === "priority" && <PriorityTab rows={rowsF} settings={settings} snap={snapF} company={company} filterNote={fNote} startQueue={startQueue} onOpen={setDetailKey} />}
 
+      {drill && <DrillModal drill={drill} onClose={() => setDrill(null)} onOpenParty={setDetailKey} />}
       {detailKey && rows.find((r) => r.g.key === detailKey) && (
         <PartyDetail row={rows.find((r) => r.g.key === detailKey)} settings={settings} snap={snap}
           onClose={() => setDetailKey(null)}
@@ -503,7 +506,7 @@ function Header({ children }) {
 
 // Past-years outstanding, split FY-wise (Apr–Mar). The current FY (still running)
 // is shown separately below so "before 31 Mar <year>" totals don't include it.
-function FYOutstandingCard({ bills, asOn }) {
+function FYOutstandingCard({ bills, asOn, onDrill }) {
   const rows = useMemo(() => fyBreakup(bills, asOn), [bills, asOn]);
   const curStart = fyStartYear(asOn);
   const past = rows.filter((r) => !r.isCurrent);
@@ -517,13 +520,15 @@ function FYOutstandingCard({ bills, asOn }) {
           <span className="text-xs font-medium text-muted uppercase tracking-wide">
             Outstanding before {fmtDate(fyEndDate(curStart))}
           </span>
-          <div className="text-2xl sm:text-3xl font-display font-bold text-rust mt-0.5">{inr(pastTotal)}</div>
+          <button onClick={() => onDrill({ title: `Before ${fmtDate(fyEndDate(curStart))} — bills`, bills: bills.filter((b) => b.outstanding > 0 && fyStartYear(b.date) < curStart) })}
+            className="block text-left text-2xl sm:text-3xl font-display font-bold text-rust mt-0.5 underline decoration-dotted underline-offset-4 decoration-rust/40">{inr(pastTotal)}</button>
           <span className="text-xs text-muted">dues from completed financial years</span>
         </div>
         {current && (
           <div className="text-right">
             <span className="text-xs font-medium text-muted uppercase tracking-wide">FY {current.label} (current)</span>
-            <div className="text-lg font-display font-bold text-ink mt-0.5">{inr(current.amount)}</div>
+            <button onClick={() => onDrill({ title: `FY ${current.label} — bills`, bills: bills.filter((b) => b.outstanding > 0 && fyStartYear(b.date) === curStart) })}
+              className="text-lg font-display font-bold text-ink mt-0.5 underline decoration-dotted underline-offset-4 decoration-muted/60">{inr(current.amount)}</button>
             <span className="text-xs text-muted">not counted above</span>
           </div>
         )}
@@ -531,10 +536,11 @@ function FYOutstandingCard({ bills, asOn }) {
       {past.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           {past.map((r) => (
-            <div key={r.startYear} className="rounded-xl border border-line bg-paper px-3 py-2">
+            <button key={r.startYear} onClick={() => onDrill({ title: `FY ${r.label} — bills`, bills: bills.filter((b) => b.outstanding > 0 && fyStartYear(b.date) === r.startYear) })}
+              className="text-left rounded-xl border border-line bg-paper px-3 py-2 hover:bg-white active:scale-[0.98] transition">
               <div className="text-[11px] font-semibold text-muted uppercase tracking-wide">FY {r.label}</div>
               <div className="text-sm font-bold text-ink mt-0.5">{compactINR(r.amount)}</div>
-            </div>
+            </button>
           ))}
         </div>
       )}

@@ -3,11 +3,11 @@
 // Each has an on-screen view plus a branded PDF and an Excel export.
 
 import { useMemo, useState } from "react";
-import { Search, Download, Phone, MessageCircle, Clock, AlertTriangle, Hourglass, Trophy, Percent, TrendingUp, TrendingDown, ChevronDown } from "lucide-react";
+import { Search, Download, Phone, MessageCircle, Clock, AlertTriangle, Hourglass, Trophy, Percent, TrendingUp, TrendingDown, ChevronDown, ChevronRight } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from "recharts";
 import { useToast } from "../context/ToastContext.jsx";
 import { formatCurrency, downloadBlob } from "../utils/helpers";
-import { BUCKETS, bucketOf, fmtDate, compactINR, exportExcel, summarizeSnapshot, riskOf, fyStartYear, fyLabel } from "../utils/outstanding";
+import { BUCKETS, bucketOf, fmtDate, compactINR, exportExcel, summarizeSnapshot, riskOf, fyStartYear, fyLabel, partyKey } from "../utils/outstanding";
 import { buildReportPdf } from "../utils/reportPdf";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
@@ -195,7 +195,7 @@ export function SummaryTab({ rows, totals, snap, settings, company, filterNote, 
 }
 
 // ======================= Bill-wise Ageing =======================
-export function BillsTab({ snap, settings, company }) {
+export function BillsTab({ snap, settings, company, filterNote, onOpen }) {
   const [q, setQ] = useState("");
   const [bucket, setBucket] = useState("all");
   const [grouped, setGrouped] = useState(false);
@@ -280,12 +280,12 @@ export function BillsTab({ snap, settings, company }) {
           <tbody>
             {view.map((v, i) => v.type === "party" ? (
               <tr key={`p${i}`} className="bg-ink/5 border-b border-line">
-                <td className="px-3 py-2 font-bold text-ink" colSpan={5}>{v.party} <span className="text-muted font-medium text-xs">· {v.n} bill{v.n > 1 ? "s" : ""}</span></td>
+                <td className="px-3 py-2 font-bold text-ink" colSpan={5}><button onClick={() => onOpen(partyKey(v.party))} className="hover:underline text-left">{v.party}</button> <span className="text-muted font-medium text-xs">· {v.n} bill{v.n > 1 ? "s" : ""}</span></td>
                 <td className="px-3 text-right font-bold">{formatCurrency(v.sum)}</td><td />
               </tr>
             ) : (
               <tr key={i} className="border-b border-line last:border-0 odd:bg-paper/40">
-                <td className="px-3 py-2.5 font-medium">{grouped ? <span className="text-muted/0">·</span> : v.b.party}</td>
+                <td className="px-3 py-2.5 font-medium">{grouped ? <span className="text-muted/0">·</span> : <button onClick={() => onOpen(partyKey(v.b.party))} className="hover:underline text-left">{v.b.party}</button>}</td>
                 <td className="px-3">{v.b.billNo}</td>
                 <td className="px-3 whitespace-nowrap">{fmtDate(v.b.date)}</td>
                 <td className="px-3 text-right">{formatCurrency(v.b.amount)}</td>
@@ -306,7 +306,7 @@ export function BillsTab({ snap, settings, company }) {
 }
 
 // ======================= Month-wise =======================
-export function MonthTab({ snap, settings, company, filterNote }) {
+export function MonthTab({ snap, settings, company, filterNote, onDrill }) {
   const data = useMemo(() => {
     const m = new Map();
     snap.bills.filter((b) => b.outstanding > 0).forEach((b) => {
@@ -402,7 +402,8 @@ export function MonthTab({ snap, settings, company, filterNote }) {
                     {y.sy === curSy && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-loom/10 text-loom">CURRENT</span>}
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="font-display font-bold text-lg">{inr(y.amount)}</span>
+                    <span role="button" tabIndex={0} onClick={(e) => { e.stopPropagation(); onDrill({ title: `FY ${y.label} — bills`, bills: snap.bills.filter((b) => b.outstanding > 0 && fyStartYear(b.date) === y.sy) }); }}
+                      className="font-display font-bold text-lg underline decoration-dotted underline-offset-4 decoration-muted/60">{inr(y.amount)}</span>
                     <ChevronDown size={18} className={`text-muted transition-transform ${isOpen ? "rotate-180" : ""}`} />
                   </div>
                 </div>
@@ -418,7 +419,8 @@ export function MonthTab({ snap, settings, company, filterNote }) {
                     <div key={r.key} className="px-4 py-2.5 flex flex-col gap-1.5">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-semibold text-sm">{r.label}</span>
-                        <span className="font-bold text-sm">{formatCurrency(r.amount)}</span>
+                        <button onClick={() => onDrill({ title: `${r.label} — bills`, bills: snap.bills.filter((b) => b.outstanding > 0 && b.date.slice(0, 7) === r.key) })}
+                          className="font-bold text-sm underline decoration-dotted underline-offset-4 decoration-muted/60 flex items-center gap-0.5">{formatCurrency(r.amount)}<ChevronRight size={14} className="text-muted" /></button>
                       </div>
                       <div className="h-1.5 rounded-full bg-line/60 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${Math.max(2, (r.amount / y.max) * 100)}%`, background: r.color }} /></div>
                       <div className="flex items-center justify-between text-[11px] text-muted">
@@ -512,7 +514,7 @@ export function PriorityTab({ rows, settings, snap, company, filterNote, startQu
 
 
 // ======================= Movement vs an earlier report =======================
-export function MovementTab({ snap, company, filterNote }) {
+export function MovementTab({ snap, company, filterNote, onOpen }) {
   const hist = snap.history || [];
   const [idx, setIdx] = useState(Math.max(0, hist.length - 1));
   const [flt, setFlt] = useState("all");
@@ -606,7 +608,7 @@ export function MovementTab({ snap, company, filterNote }) {
           <tbody>
             {list.map((r) => (
               <tr key={r.name} className="border-b border-line last:border-0 odd:bg-paper/40">
-                <td className="px-4 py-2.5 font-medium">{r.name} {r.kind === "new" && <span className="text-[10px] font-bold text-thread ml-1">NEW</span>}{r.kind === "cleared" && <span className="text-[10px] font-bold text-loom ml-1">CLEARED</span>}</td>
+                <td className="px-4 py-2.5 font-medium">{r.cur ? <button onClick={() => onOpen(partyKey(r.name))} className="hover:underline text-left">{r.name}</button> : r.name} {r.kind === "new" && <span className="text-[10px] font-bold text-thread ml-1">NEW</span>}{r.kind === "cleared" && <span className="text-[10px] font-bold text-loom ml-1">CLEARED</span>}</td>
                 <td className="px-3 text-right text-muted whitespace-nowrap">{r.prev ? formatCurrency(r.prev) : "–"}</td>
                 <td className="px-3 text-right whitespace-nowrap">{r.cur ? formatCurrency(r.cur) : "–"}</td>
                 <td className={`px-4 text-right font-semibold whitespace-nowrap ${colr(r.diff)}`}>{sign(r.diff)}{formatCurrency(Math.abs(r.diff))}{r.pct != null && <span className="text-[10px] ml-1 opacity-70">({r.pct.toFixed(0)}%)</span>}</td>
