@@ -388,6 +388,8 @@ export function normName(s) {
     .join(" ");
 }
 
+export const partyKey = (name) => normName(name) || name;
+
 export function groupParties(bills) {
   const map = new Map();
   for (const b of bills) {
