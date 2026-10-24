@@ -29,6 +29,7 @@ import {
   loadSnapshot, saveSnapshot, loadLinks, saveLinks, loadSent, saveSent,
   loadSettings, saveSettings, DEFAULT_FOOTER, compactINR, summaryMessage, SOURCES, companyFor, loadCollections, saveCollections,
   billKey, subGroup, nextHistory, fifoSnapshot, riskOf,
+  fyBreakup, fyStartYear, fyEndDate,
 } from "../utils/outstanding";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
@@ -421,6 +422,8 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
         <KpiCard label="Not linked to master" value={unmatched} tone={unmatched ? "thread" : "loom"} icon={Users} sub={unmatched ? "link before sending" : "all matched"} />
       </div>
 
+      <FYOutstandingCard bills={snap.bills} asOn={snap.asOn} />
+
       <div className="flex gap-1 overflow-x-auto border-b border-line">
         {TABS.filter((t) => t.id !== "collections" || source === "ranjan").map((t) => (
           <button key={t.id} onClick={() => setTab(t.id)}
@@ -494,6 +497,47 @@ function Header({ children }) {
         <p className="text-muted text-sm mt-1">Party-wise dues, ageing and WhatsApp statements</p>
       </div>
       <div className="flex items-center gap-2">{children}</div>
+    </div>
+  );
+}
+
+// Past-years outstanding, split FY-wise (Apr–Mar). The current FY (still running)
+// is shown separately below so "before 31 Mar <year>" totals don't include it.
+function FYOutstandingCard({ bills, asOn }) {
+  const rows = useMemo(() => fyBreakup(bills, asOn), [bills, asOn]);
+  const curStart = fyStartYear(asOn);
+  const past = rows.filter((r) => !r.isCurrent);
+  const current = rows.find((r) => r.isCurrent);
+  const pastTotal = past.reduce((t, r) => t + r.amount, 0);
+  if (!rows.length) return null;
+  return (
+    <div className="bg-panel border border-line rounded-2xl p-4 sm:p-5 shadow-sm flex flex-col gap-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <span className="text-xs font-medium text-muted uppercase tracking-wide">
+            Outstanding before {fmtDate(fyEndDate(curStart))}
+          </span>
+          <div className="text-2xl sm:text-3xl font-display font-bold text-rust mt-0.5">{inr(pastTotal)}</div>
+          <span className="text-xs text-muted">dues from completed financial years</span>
+        </div>
+        {current && (
+          <div className="text-right">
+            <span className="text-xs font-medium text-muted uppercase tracking-wide">FY {current.label} (current)</span>
+            <div className="text-lg font-display font-bold text-ink mt-0.5">{inr(current.amount)}</div>
+            <span className="text-xs text-muted">not counted above</span>
+          </div>
+        )}
+      </div>
+      {past.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {past.map((r) => (
+            <div key={r.startYear} className="rounded-xl border border-line bg-paper px-3 py-2">
+              <div className="text-[11px] font-semibold text-muted uppercase tracking-wide">FY {r.label}</div>
+              <div className="text-sm font-bold text-ink mt-0.5">{compactINR(r.amount)}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

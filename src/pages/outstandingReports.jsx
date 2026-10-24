@@ -3,11 +3,11 @@
 // Each has an on-screen view plus a branded PDF and an Excel export.
 
 import { useMemo, useState } from "react";
-import { Search, Download, Phone, MessageCircle, Clock, AlertTriangle, Hourglass, Trophy, Percent, TrendingUp, TrendingDown } from "lucide-react";
+import { Search, Download, Phone, MessageCircle, Clock, AlertTriangle, Hourglass, Trophy, Percent, TrendingUp, TrendingDown, ChevronDown } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from "recharts";
 import { useToast } from "../context/ToastContext.jsx";
 import { formatCurrency, downloadBlob } from "../utils/helpers";
-import { BUCKETS, bucketOf, fmtDate, compactINR, exportExcel, summarizeSnapshot, riskOf } from "../utils/outstanding";
+import { BUCKETS, bucketOf, fmtDate, compactINR, exportExcel, summarizeSnapshot, riskOf, fyStartYear, fyLabel } from "../utils/outstanding";
 import { buildReportPdf } from "../utils/reportPdf";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
@@ -306,7 +306,7 @@ export function BillsTab({ snap, settings, company }) {
 }
 
 // ======================= Month-wise =======================
-export function MonthTab({ snap, settings, company }) {
+export function MonthTab({ snap, settings, company, filterNote }) {
   const data = useMemo(() => {
     const m = new Map();
     snap.bills.filter((b) => b.outstanding > 0).forEach((b) => {
@@ -332,47 +332,111 @@ export function MonthTab({ snap, settings, company }) {
     foot: ["TOTAL", data.reduce((s, r) => s + r.bills, 0), "", formatCurrency(total), "100%", ""],
     align: ["left", "center", "center", "right", "right", "center"],
   });
+  // ---- financial-year grouping (Apr–Mar) so ~70 months become a handful of readable blocks ----
+  const years = useMemo(() => {
+    const m = new Map();
+    snap.bills.filter((b) => b.outstanding > 0).forEach((b) => {
+      const sy = fyStartYear(b.date);
+      if (!m.has(sy)) m.set(sy, { sy, label: fyLabel(sy), amount: 0, bills: 0, wd: 0, parties: new Set(), months: [] });
+      const y = m.get(sy);
+      y.amount += b.outstanding; y.bills += 1; y.wd += b.outstanding * b.days; y.parties.add(b.party);
+    });
+    data.forEach((d) => { const y = m.get(fyStartYear(`${d.key}-01`)); if (y) y.months.push(d); });
+    return [...m.values()].sort((a, b) => b.sy - a.sy).map((y) => {
+      const avg = y.amount ? Math.round(y.wd / y.amount) : 0;
+      return { ...y, parties: y.parties.size, avg, color: bucketOf(avg).color, share: (y.amount / (total || 1)) * 100, months: [...y.months].reverse(), max: Math.max(...y.months.map((x) => x.amount), 1) };
+    });
+  }, [snap, data, total]);
+  const curSy = years[0]?.sy;
+  const [open, setOpen] = useState(() => new Set(curSy != null ? [curSy] : []));
+  const toggle = (sy) => setOpen((o) => { const n = new Set(o); n.has(sy) ? n.delete(sy) : n.add(sy); return n; });
+  const allOpen = years.length > 0 && open.size === years.length;
+  const biggest = data.reduce((a, r) => (r.amount > (a?.amount || 0) ? r : a), null);
+  const oldest = data[0];
+  const chartData = [...years].reverse().map((y) => ({ ...y, tick: y.label }));
+
   return (
     <div className="flex flex-col gap-4">
-      <ReportBar title="Month-wise outstanding" note="How much of today's outstanding comes from each invoice month."
+      <ReportBar title="Month-wise outstanding" note="Today's outstanding, grouped by the financial year (Apr–Mar) and month of the invoice."
         onExcel={() => exportExcel(`Monthwise_Outstanding_${snap.asOn}.xlsx`, "Month-wise", data.map((r) => ({ ...r, sharePct: Number(r.share.toFixed(1)) })), cols)} onPdf={pdf} />
+
+      <div className="grid grid-cols-2 gap-2.5">
+        <Stat icon={Clock} label="Total due" value={inr(total)} sub={`${data.reduce((s, r) => s + r.bills, 0)} bills · ${data.length} months`} />
+        <Stat icon={Hourglass} label="Avg. age" value={`${weightedAge(snap.bills)} days`} sub={oldest ? `oldest: ${oldest.label}` : ""} tone="text-rust" />
+        <Stat icon={TrendingUp} label="Biggest month" value={biggest ? compactINR(biggest.amount) : "–"} sub={biggest ? `${biggest.label} · ${biggest.share.toFixed(0)}% of dues` : ""} />
+        <Stat icon={Percent} label="Before current FY" value={compactINR(years.filter((y) => y.sy !== curSy).reduce((s, y) => s + y.amount, 0))} sub="older financial years" tone="text-rust" />
+      </div>
+
       <div className="bg-panel border border-line rounded-2xl p-4">
-        <div className="h-52">
+        <div className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">Financial year-wise</div>
+        <div className="h-44">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} margin={{ left: 0, right: 8, top: 22 }}>
-              <XAxis dataKey="short" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} interval={0} angle={data.length > 7 ? -35 : 0} textAnchor={data.length > 7 ? "end" : "middle"} height={data.length > 7 ? 44 : 24} />
+            <BarChart data={chartData} margin={{ left: 4, right: 4, top: 22 }}>
+              <XAxis dataKey="tick" tick={{ fontSize: 12, fontWeight: 600 }} axisLine={false} tickLine={false} interval={0} />
               <YAxis hide />
-              <Tooltip formatter={(v) => inr(v)} labelFormatter={(l, p) => p?.[0]?.payload?.label || l} cursor={{ fill: "rgba(0,0,0,0.04)" }} />
-              <Bar dataKey="amount" radius={[6, 6, 0, 0]}>
-                {data.map((d) => <Cell key={d.key} fill={d.color} />)}
-                <LabelList dataKey="amount" position="top" formatter={(v) => compactINR(v, false)} style={{ fontSize: 10, fontWeight: 600 }} />
+              <Tooltip formatter={(v) => inr(v)} labelFormatter={(l) => `FY ${l}`} cursor={{ fill: "rgba(0,0,0,0.04)" }} />
+              <Bar dataKey="amount" radius={[6, 6, 0, 0]} onClick={(d) => d?.sy != null && setOpen((o) => new Set(o).add(d.sy))}>
+                {chartData.map((d) => <Cell key={d.sy} fill={d.color} />)}
+                <LabelList dataKey="amount" position="top" formatter={(v) => compactINR(v, false)} style={{ fontSize: 11, fontWeight: 700 }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
-        <p className="text-[11px] text-muted text-center mt-1">Bar colour = average age of that month's bills (green fresh → red old)</p>
+        <p className="text-[11px] text-muted text-center mt-1">Bar colour = average age of that year's bills (green fresh → red old). Tap a bar to open that year.</p>
       </div>
-      <div className="bg-panel border border-line rounded-2xl overflow-x-auto">
-        <table className="w-full text-sm min-w-[520px]">
-          <thead><tr className="text-[11px] text-muted uppercase tracking-wide border-b border-line bg-paper/60">
-            <th className="text-left px-4 py-3">Invoice month</th><th className="text-center px-3">Bills</th><th className="text-center px-3">Parties</th><th className="text-right px-3">Outstanding</th><th className="text-right px-3">Share</th><th className="text-right px-4">Avg age</th>
-          </tr></thead>
-          <tbody>
-            {data.map((r) => (
-              <tr key={r.key} className="border-b border-line last:border-0 odd:bg-paper/40">
-                <td className="px-4 py-2.5 font-medium">{r.label}</td>
-                <td className="text-center px-3">{r.bills}</td>
-                <td className="text-center px-3">{r.parties}</td>
-                <td className="text-right px-3 font-semibold">{formatCurrency(r.amount)}</td>
-                <td className="text-right px-3 text-muted">{r.share.toFixed(1)}%</td>
-                <td className="text-right px-4"><DaysBadge days={r.avg} /></td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot><tr className="font-bold border-t-2 border-line bg-paper/70">
-            <td className="px-4 py-3">Total</td><td className="text-center">{data.reduce((s, r) => s + r.bills, 0)}</td><td /><td className="text-right px-3">{formatCurrency(total)}</td><td className="text-right px-3">100%</td><td />
-          </tr></tfoot>
-        </table>
+
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-semibold text-muted uppercase tracking-wide">Year → month breakup</div>
+        <button onClick={() => setOpen(allOpen ? new Set() : new Set(years.map((y) => y.sy)))} className="text-xs font-semibold text-ink2 hover:underline">{allOpen ? "Collapse all" : "Expand all"}</button>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        {years.map((y) => {
+          const isOpen = open.has(y.sy);
+          return (
+            <div key={y.sy} className="bg-panel border border-line rounded-2xl overflow-hidden">
+              <button onClick={() => toggle(y.sy)} className="w-full text-left px-4 py-3.5 flex flex-col gap-2" aria-expanded={isOpen}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-display font-bold text-base">FY {y.label}</span>
+                    {y.sy === curSy && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-loom/10 text-loom">CURRENT</span>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-display font-bold text-lg">{inr(y.amount)}</span>
+                    <ChevronDown size={18} className={`text-muted transition-transform ${isOpen ? "rotate-180" : ""}`} />
+                  </div>
+                </div>
+                <div className="h-2 rounded-full bg-paper overflow-hidden"><div className="h-full rounded-full" style={{ width: `${Math.max(2, y.share)}%`, background: y.color }} /></div>
+                <div className="flex items-center justify-between text-[11px] text-muted">
+                  <span>{y.share.toFixed(1)}% of dues · {y.bills} bills · {y.parties} parties</span>
+                  <DaysBadge days={y.avg} />
+                </div>
+              </button>
+              {isOpen && (
+                <div className="border-t border-line bg-paper/40 divide-y divide-line">
+                  {y.months.map((r) => (
+                    <div key={r.key} className="px-4 py-2.5 flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-sm">{r.label}</span>
+                        <span className="font-bold text-sm">{formatCurrency(r.amount)}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-line/60 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${Math.max(2, (r.amount / y.max) * 100)}%`, background: r.color }} /></div>
+                      <div className="flex items-center justify-between text-[11px] text-muted">
+                        <span>{r.bills} bill{r.bills === 1 ? "" : "s"} · {r.parties} part{r.parties === 1 ? "y" : "ies"} · {r.share.toFixed(1)}%</span>
+                        <DaysBadge days={r.avg} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="bg-ink text-white rounded-2xl px-4 py-3 flex items-center justify-between">
+        <span className="font-semibold text-sm">Total outstanding</span>
+        <span className="font-display font-bold text-lg">{inr(total)}</span>
       </div>
     </div>
   );
