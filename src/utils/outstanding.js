@@ -23,6 +23,34 @@ export function bucketOf(days) {
   return BUCKETS.find((b) => d >= b.min && d <= b.max) || BUCKETS[BUCKETS.length - 1];
 }
 
+// ---------- Indian financial year (Apr–Mar) ----------
+// FY "start year" for a date — e.g. 10-Jan-2026 and 15-Jul-2025 are both FY25 (label "25-26").
+export function fyStartYear(dateStr) {
+  const [y, m] = String(dateStr).split("-").map(Number);
+  return m >= 4 ? y : y - 1;
+}
+export function fyLabel(startYear) {
+  const a = String(startYear).slice(-2);
+  const b = String(startYear + 1).slice(-2);
+  return `${a}-${b}`;
+}
+// Bills due (outstanding > 0) grouped by financial year, newest first.
+// asOn decides which FY is "current" — everything before it is a completed year.
+export function fyBreakup(bills, asOn) {
+  const curStart = fyStartYear(asOn);
+  const map = new Map();
+  bills.forEach((b) => {
+    if (!(b.outstanding > 0)) return;
+    const sy = fyStartYear(b.date);
+    map.set(sy, (map.get(sy) || 0) + b.outstanding);
+  });
+  return [...map.entries()]
+    .sort((a, b) => b[0] - a[0])
+    .map(([sy, amount]) => ({ startYear: sy, label: fyLabel(sy), amount, isCurrent: sy === curStart }));
+}
+// FY-end (31 March) just before the given FY start year, as an ISO date — e.g. 2026 → "2026-03-31".
+export const fyEndDate = (curStartYear) => `${curStartYear}-03-31`;
+
 // ---------- localStorage ----------
 const K_SNAP = "amihem_crm_outstanding_snapshot";
 const K_LINKS = "amihem_crm_outstanding_links";
