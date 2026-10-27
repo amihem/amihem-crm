@@ -3,7 +3,7 @@
 // Each has an on-screen view plus a branded PDF and an Excel export.
 
 import { useMemo, useState } from "react";
-import { Search, Download, Phone, MessageCircle, Clock, AlertTriangle, Hourglass, Trophy, Percent, TrendingUp, TrendingDown, ChevronDown, ChevronRight } from "lucide-react";
+import { Search, Download, Phone, MessageCircle, Clock, AlertTriangle, Hourglass, Trophy, Percent, TrendingUp, TrendingDown, ChevronDown, ChevronRight, ArrowUpDown } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from "recharts";
 import { useToast } from "../context/ToastContext.jsx";
 import { formatCurrency, downloadBlob } from "../utils/helpers";
@@ -18,6 +18,20 @@ const BUCKET_COLORS = Object.fromEntries(BUCKETS.map((b, i) => [i, b.color]));
 export function DaysBadge({ days }) {
   const b = bucketOf(days);
   return <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: `${b.color}1F`, color: b.color }}>{days}d</span>;
+}
+
+// Compact "Sort" dropdown shared by every report. options: [{ id, label }]
+export function SortSelect({ value, onChange, options }) {
+  const known = options.some((o) => o.id === value);
+  return (
+    <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted">
+      <ArrowUpDown size={13} /> Sort
+      <select value={value} onChange={(e) => onChange(e.target.value)} className="border border-line rounded-lg px-2.5 py-1.5 text-xs bg-white text-ink font-semibold outline-none focus:border-ink2 max-w-[210px]">
+        {!known && <option value={value}>Column sort</option>}
+        {options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+    </label>
+  );
 }
 
 export function RiskBadge({ level }) {
@@ -74,7 +88,7 @@ export function SummaryTab({ rows, totals, snap, settings, company, filterNote, 
     const x = val(a.g, sort.key), y = val(b.g, sort.key);
     return (typeof x === "string" ? x.localeCompare(y) : x - y) * sort.dir;
   });
-  const shownRows = bk ? sorted.filter((r) => r.g.buckets[bk] > 0).sort((a, b) => (sort.key === "total" ? b.g.buckets[bk] - a.g.buckets[bk] : 0)) : sorted;
+  const shownRows = bk ? sorted.filter((r) => r.g.buckets[bk] > 0) : sorted;
   const top10 = [...rows].filter((r) => r.g.due > 0).sort((a, b) => b.g.due - a.g.due).slice(0, 10);
   const top10Max = Math.max(1, ...top10.map((r) => r.g.due));
   const colMax = Object.fromEntries(BUCKETS.map((b) => [b.key, Math.max(1, ...rows.map((r) => r.g.buckets[b.key]))]));
@@ -98,6 +112,12 @@ export function SummaryTab({ rows, totals, snap, settings, company, filterNote, 
     colColors: Object.fromEntries(BUCKETS.map((b, i) => [i + 2, b.color])),
     colWidths: { 0: 24 },
   });
+  const sortOpts = [
+    { id: "name|1", label: "Party A → Z" }, { id: "name|-1", label: "Party Z → A" },
+    { id: "total|-1", label: "Net outstanding — high to low" }, { id: "total|1", label: "Net outstanding — low to high" },
+    { id: "oldest|-1", label: "Oldest bill first" },
+    ...BUCKETS.map((b) => ({ id: `${b.key}|-1`, label: `${b.label} days — high to low` })),
+  ];
   const th = (key, label, color, cls = "text-right px-3") => (
     <th onClick={() => setSort((s) => ({ key, dir: s.key === key ? -s.dir : -1 }))} style={color ? { color } : undefined}
       className={`${cls} py-3 cursor-pointer select-none whitespace-nowrap`}>{label}{sort.key === key ? (sort.dir === -1 ? " ↓" : " ↑") : ""}</th>
@@ -150,6 +170,7 @@ export function SummaryTab({ rows, totals, snap, settings, company, filterNote, 
       <ReportBar title={bk ? `Parties with ${BUCKETS.find((b) => b.key === bk).label} day bills` : "Ageing summary — party wise"} note={bk ? "Filtered by the ageing box you tapped — tap it again to clear." : "Tap an ageing box to filter. Tap a party for its bills. Tap a heading to sort."}
         onExcel={() => exportExcel(`Ageing_Summary_${snap.asOn}.xlsx`, "Ageing Summary", exportData(), cols)} onPdf={pdf} />
 
+      <div className="flex justify-end"><SortSelect value={`${sort.key}|${sort.dir}`} options={sortOpts} onChange={(v) => { const [key, dir] = v.split("|"); setSort({ key, dir: Number(dir) }); }} /></div>
       <div className="bg-panel border border-line rounded-2xl overflow-x-auto">
         <table className="w-full text-sm min-w-[760px]">
           <thead>
@@ -205,8 +226,18 @@ export function BillsTab({ snap, settings, company, filterNote, onOpen }) {
     const l = snap.bills.filter((b) => b.outstanding > 0)
       .filter((b) => !q || b.party.toLowerCase().includes(q.toLowerCase()) || b.billNo.toLowerCase().includes(q.toLowerCase()))
       .filter((b) => bucket === "all" || bucketOf(b.days).key === bucket);
+    if (grouped) {
+      // order the party blocks by the chosen sort; bills inside a party stay oldest-first
+      const st = new Map();
+      l.forEach((b) => { const t = st.get(b.party) || { sum: 0, days: 0, date: b.date }; t.sum += b.outstanding; t.days = Math.max(t.days, b.days); if (b.date < t.date) t.date = b.date; st.set(b.party, t); });
+      return [...l].sort((a, b) => {
+        if (a.party === b.party) return a.date.localeCompare(b.date);
+        const sa = st.get(a.party), sb = st.get(b.party), k = sort.key;
+        const c = k === "outstanding" || k === "amount" || k === "credit" ? (sa.sum - sb.sum) * sort.dir : k === "days" ? (sa.days - sb.days) * sort.dir : k === "date" ? sa.date.localeCompare(sb.date) * sort.dir : a.party.localeCompare(b.party) * (k === "party" ? sort.dir : 1);
+        return c || a.party.localeCompare(b.party);
+      });
+    }
     return [...l].sort((a, b) => {
-      if (grouped) return a.party.localeCompare(b.party) || a.date.localeCompare(b.date);
       const x = a[sort.key], y = b[sort.key];
       return (typeof x === "string" ? x.localeCompare(y) : x - y) * sort.dir;
     });
@@ -227,9 +258,9 @@ export function BillsTab({ snap, settings, company, filterNote, onOpen }) {
   }, [list, grouped]);
 
   const th = (key, label, right) => (
-    <th onClick={() => !grouped && setSort((s) => ({ key, dir: s.key === key ? -s.dir : -1 }))}
-      className={`${right ? "text-right" : "text-left"} px-3 py-3 ${grouped ? "" : "cursor-pointer select-none hover:text-ink"} whitespace-nowrap`}>
-      {label}{!grouped && sort.key === key ? (sort.dir === -1 ? " ↓" : " ↑") : ""}
+    <th onClick={() => setSort((s) => ({ key, dir: s.key === key ? -s.dir : -1 }))}
+      className={`${right ? "text-right" : "text-left"} px-3 py-3 cursor-pointer select-none hover:text-ink whitespace-nowrap`}>
+      {label}{sort.key === key ? (sort.dir === -1 ? " ↓" : " ↑") : ""}
     </th>
   );
   const cols = [
@@ -263,6 +294,8 @@ export function BillsTab({ snap, settings, company, filterNote, onOpen }) {
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Party or bill no…" className="border border-line rounded-lg pl-9 pr-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
         </div>
+        <SortSelect value={`${sort.key}|${sort.dir}`} onChange={(v) => { const [key, dir] = v.split("|"); setSort({ key, dir: Number(dir) }); }}
+          options={[{ id: "party|1", label: "Party A → Z" }, { id: "party|-1", label: "Party Z → A" }, { id: "outstanding|-1", label: "Outstanding — high to low" }, { id: "outstanding|1", label: "Outstanding — low to high" }, { id: "days|-1", label: "Oldest first" }, { id: "days|1", label: "Newest first" }, { id: "date|1", label: "Bill date — old to new" }, { id: "date|-1", label: "Bill date — new to old" }]} />
         <button onClick={() => setGrouped(!grouped)} className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${grouped ? "bg-ink text-white border-ink" : "border-line hover:bg-paper"}`}>Group by party</button>
         <button onClick={() => setBucket("all")} className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${bucket === "all" ? "bg-ink text-white border-ink" : "border-line hover:bg-paper"}`}>All</button>
         {BUCKETS.map((b) => (
@@ -446,8 +479,11 @@ export function MonthTab({ snap, settings, company, filterNote, onDrill }) {
 
 // ======================= Collection Priority =======================
 export function PriorityTab({ rows, settings, snap, company, filterNote, startQueue, onOpen }) {
-  const list = rows.filter((r) => r.overdue > 0).sort((a, b) => b.overdue - a.overdue);
-  const max = list[0]?.overdue || 1;
+  const [psort, setPsort] = useState("overdue|-1");
+  const [pk, pd] = psort.split("|"), pdir = Number(pd);
+  const pval = (r) => (pk === "name" ? r.g.name : pk === "due" ? r.g.due : pk === "oldest" ? r.g.oldest : r.overdue);
+  const list = rows.filter((r) => r.overdue > 0).sort((a, b) => { const x = pval(a), y = pval(b); return (typeof x === "string" ? x.localeCompare(y) : x - y) * pdir; });
+  const max = Math.max(1, ...list.map((r) => r.overdue));
   const sendable = list.filter((r) => r.match.status === "auto" && r.phone);
   const overdueTotal = list.reduce((s, r) => s + r.overdue, 0);
   const overdueBills = (r) => r.g.bills.filter((b) => b.outstanding > 0 && b.days > settings.creditDays).length;
@@ -472,7 +508,8 @@ export function PriorityTab({ rows, settings, snap, company, filterNote, startQu
       </div>
       <ReportBar title="Collection priority" note="Parties ranked by overdue amount — follow up from the top."
         onExcel={() => exportExcel(`Collection_Priority_${snap.asOn}.xlsx`, "Collection Priority", data(), cols)} onPdf={pdf} />
-      <div className="flex justify-end">
+      <div className="flex justify-between items-center gap-2 flex-wrap">
+        <SortSelect value={psort} onChange={setPsort} options={[{ id: "overdue|-1", label: "Overdue — high to low" }, { id: "overdue|1", label: "Overdue — low to high" }, { id: "name|1", label: "Party A → Z" }, { id: "name|-1", label: "Party Z → A" }, { id: "due|-1", label: "Total dues — high to low" }, { id: "oldest|-1", label: "Oldest bill first" }]} />
         <button disabled={!sendable.length} onClick={() => startQueue(sendable, { onlyOverdue: true })}
           className="bg-loom text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 disabled:opacity-40">
           <MessageCircle size={14} /> Remind all overdue ({sendable.length})
@@ -483,7 +520,7 @@ export function PriorityTab({ rows, settings, snap, company, filterNote, startQu
         return (
           <div key={r.g.key} className="bg-panel border border-line rounded-xl p-3 sm:p-4">
             <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 items-start">
-              <span className={`w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center ${i < 3 ? "bg-rust text-white" : "bg-ink/10 text-ink"}`}>{i + 1}</span>
+              <span className={`w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center ${i < 3 && psort === "overdue|-1" ? "bg-rust text-white" : "bg-ink/10 text-ink"}`}>{i + 1}</span>
               <div className="min-w-0">
                 <button onClick={() => onOpen(r.g.key)} className="font-semibold text-sm text-left hover:underline leading-snug">{r.g.name}</button>
                 <div className="text-xs text-muted mt-1 flex items-center gap-1.5 flex-wrap">
@@ -518,6 +555,7 @@ export function MovementTab({ snap, company, filterNote, onOpen }) {
   const hist = snap.history || [];
   const [idx, setIdx] = useState(Math.max(0, hist.length - 1));
   const [flt, setFlt] = useState("all");
+  const [msort, setMsort] = useState("chg");
   const cur = useMemo(() => summarizeSnapshot(snap), [snap]);
   const prev = hist[Math.min(idx, hist.length - 1)];
 
@@ -542,7 +580,8 @@ export function MovementTab({ snap, company, filterNote, onOpen }) {
   }
   const count = (k) => data.filter((r) => r.kind === k).length;
   const change = cur.net - prev.net;
-  const list = flt === "all" ? data.filter((r) => r.kind !== "same") : data.filter((r) => r.kind === flt);
+  const mcmp = { chg: (a, b) => Math.abs(b.diff) - Math.abs(a.diff), "name|1": (a, b) => a.name.localeCompare(b.name), "name|-1": (a, b) => b.name.localeCompare(a.name), "cur|-1": (a, b) => b.cur - a.cur, "up|-1": (a, b) => b.diff - a.diff, "down|1": (a, b) => a.diff - b.diff }[msort];
+  const list = [...(flt === "all" ? data.filter((r) => r.kind !== "same") : data.filter((r) => r.kind === flt))].sort(mcmp);
   const kinds = [["all", "Changed"], ["up", `Increased (${count("up")})`], ["down", `Reduced (${count("down")})`], ["new", `New (${count("new")})`], ["cleared", `Cleared (${count("cleared")})`]];
   const colr = (d) => (d > 0 ? "text-rust" : d < 0 ? "text-loom" : "text-muted");
   const sign = (d) => (d > 0 ? "+" : d < 0 ? "-" : "");
@@ -597,6 +636,7 @@ export function MovementTab({ snap, company, filterNote, onOpen }) {
 
       <ReportBar title="Party-wise movement" note="Biggest changes first. Red = outstanding went up, green = came down."
         onExcel={() => exportExcel(`Movement_${prev.asOn}_to_${cur.asOn}.xlsx`, "Movement", exportRows(), cols)} onPdf={pdf} />
+      <div className="flex justify-end"><SortSelect value={msort} onChange={setMsort} options={[{ id: "chg", label: "Biggest change first" }, { id: "name|1", label: "Party A → Z" }, { id: "name|-1", label: "Party Z → A" }, { id: "cur|-1", label: "Current outstanding — high to low" }, { id: "up|-1", label: "Increase — high to low" }, { id: "down|1", label: "Reduction — high to low" }]} /></div>
       <div className="flex gap-2 flex-wrap">
         {kinds.map(([id, label]) => <button key={id} onClick={() => setFlt(id)} className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${flt === id ? "bg-ink text-white border-ink" : "border-line hover:bg-paper"}`}>{label}</button>)}
       </div>

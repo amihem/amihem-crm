@@ -7,13 +7,14 @@ import { AlertTriangle, CheckCircle2, Clock, Ban, MessageCircle } from "lucide-r
 import { formatCurrency } from "../utils/helpers";
 import { buildWhatsAppLink } from "../services/whatsapp";
 import { creditStatus, hasNoPayment, riskOf, pickGroup, compactINR, todayIso, diffDays, fmtDate, exportExcel } from "../utils/outstanding";
-import { ReportBar, Stat, DaysBadge, RiskBadge, savePdf } from "./outstandingReports.jsx";
+import { ReportBar, Stat, DaysBadge, RiskBadge, SortSelect, savePdf } from "./outstandingReports.jsx";
 
 const inr = (n) => `₹${formatCurrency(n)}`;
 const WAIT_DAYS = 7; // a deposit older than this and still not credited needs a follow-up
 
 export default function TrackerTab({ rows, rawGroups, coll, updateColl, settings, company, snap, showToast, onOpen }) {
   const [showAll, setShowAll] = useState(false);
+  const [nsort, setNsort] = useState("overdue|-1");
   const today = todayIso();
   const profile = coll?.profile || {};
 
@@ -36,10 +37,15 @@ export default function TrackerTab({ rows, rawGroups, coll, updateColl, settings
   };
 
   // ---- B: accounts never credited with a payment ----
-  const noPay = useMemo(() => rows.filter((r) => {
+  const noPayBase = useMemo(() => rows.filter((r) => {
     const raw = pickGroup(rawGroups, r.g.name) || r.g;
     return r.g.due > 0 && hasNoPayment(raw);
   }).map((r) => ({ r, risk: riskOf(r.g, r.overdue, settings.creditDays) })).sort((a, b) => b.r.overdue - a.r.overdue || b.r.g.due - a.r.g.due), [rows, rawGroups, settings.creditDays]);
+  const noPay = useMemo(() => {
+    const [k, d] = nsort.split("|"), dir = Number(d);
+    const v = (x) => (k === "name" ? x.r.g.name : k === "due" ? x.r.g.due : k === "oldest" ? x.r.g.oldest : x.r.overdue);
+    return [...noPayBase].sort((a, b) => { const p = v(a), q = v(b); return (typeof p === "string" ? p.localeCompare(q) : p - q) * dir || b.r.g.due - a.r.g.due; });
+  }, [noPayBase, nsort]);
   const noPayAmt = noPay.reduce((s, x) => s + x.r.g.due, 0);
 
   const cols = [{ key: "party", label: "Party" }, { key: "bills", label: "Bills" }, { key: "due", label: "Outstanding" }, { key: "overdue", label: "Overdue" }, { key: "oldest", label: "Oldest (days)" }, { key: "risk", label: "Risk" }];
@@ -104,6 +110,7 @@ export default function TrackerTab({ rows, rawGroups, coll, updateColl, settings
         </div>
         <ReportBar title="Accounts with no payment credited" note="Parties whose bills have not received any payment or advance in the ledger. Highest overdue first."
           onExcel={() => exportExcel(`No_Payment_Accounts_${snap.asOn}.xlsx`, "No payment", data(), cols)} onPdf={pdf} />
+        <div className="flex justify-end"><SortSelect value={nsort} onChange={setNsort} options={[{ id: "overdue|-1", label: "Overdue — high to low" }, { id: "name|1", label: "Party A → Z" }, { id: "name|-1", label: "Party Z → A" }, { id: "due|-1", label: "Outstanding — high to low" }, { id: "oldest|-1", label: "Oldest bill first" }]} /></div>
         {noPay.map(({ r, risk }) => (
           <div key={r.g.key} className="bg-panel border border-line rounded-xl p-3 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 items-start">
             <div className="min-w-0">

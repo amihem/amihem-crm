@@ -2,14 +2,15 @@
 // Any report amount (month, financial year, ...) opens this with the bills behind that amount.
 // Tapping a party name inside opens the full party detail on top (and closing it returns here).
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import Modal from "../components/Modal.jsx";
 import { formatCurrency } from "../utils/helpers";
 import { fmtDate, partyKey } from "../utils/outstanding";
-import { DaysBadge } from "./outstandingReports.jsx";
+import { DaysBadge, SortSelect } from "./outstandingReports.jsx";
 
 export default function DrillModal({ drill, onClose, onOpenParty }) {
+  const [sortId, setSortId] = useState("amt|-1");
   const groups = useMemo(() => {
     const m = new Map();
     drill.bills.forEach((b) => {
@@ -17,8 +18,8 @@ export default function DrillModal({ drill, onClose, onOpenParty }) {
       const g = m.get(b.party);
       g.sum += b.outstanding; g.bills.push(b);
     });
-    return [...m.values()].map((g) => ({ ...g, bills: g.bills.sort((a, b) => a.date.localeCompare(b.date)) })).sort((a, b) => b.sum - a.sum);
-  }, [drill]);
+    return [...m.values()].map((g) => ({ ...g, bills: g.bills.sort((a, b) => a.date.localeCompare(b.date)) })).sort((a, b) => (sortId === "name|1" ? a.party.localeCompare(b.party) : sortId === "name|-1" ? b.party.localeCompare(a.party) : sortId === "amt|1" ? a.sum - b.sum : b.sum - a.sum));
+  }, [drill, sortId]);
   const total = groups.reduce((s, g) => s + g.sum, 0);
 
   return (
@@ -28,6 +29,7 @@ export default function DrillModal({ drill, onClose, onOpenParty }) {
           <div className="text-xs text-muted">{drill.bills.length} bill{drill.bills.length === 1 ? "" : "s"} · {groups.length} part{groups.length === 1 ? "y" : "ies"} · tap a party for full details</div>
           <div className="font-display font-extrabold text-2xl">₹{formatCurrency(total)}</div>
         </div>
+        <SortSelect value={sortId} onChange={setSortId} options={[{ id: "amt|-1", label: "Amount — high to low" }, { id: "amt|1", label: "Amount — low to high" }, { id: "name|1", label: "Party A → Z" }, { id: "name|-1", label: "Party Z → A" }]} />
         <div className="flex flex-col gap-3">
           {groups.map((g) => (
             <div key={g.party} className="border border-line rounded-xl overflow-hidden">
