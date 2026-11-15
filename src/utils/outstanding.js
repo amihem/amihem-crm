@@ -465,8 +465,34 @@ export const billKey = (b) => `${b.billNo}|${b.date}|${b.outstanding}`;
 // A group that only contains the chosen bills (keys = Set of billKey), totals recomputed.
 export function subGroup(g, keys) {
   const sub = groupParties(g.bills.filter((b) => keys.has(billKey(b))))[0];
-  if (sub) return { ...sub, key: g.key, name: g.name, advAdj: g.advAdj, advRefs: g.advRefs };
+  if (sub) return { ...sub, key: g.key, name: g.name, advAdj: g.advAdj, advRefs: g.advRefs, diffAmt: g.diffAmt };
   return { ...g, bills: [], total: 0, due: 0, advance: 0, oldest: 0, buckets: Object.fromEntries(BUCKETS.map((k) => [k.key, 0])) };
+}
+
+// ---------- differences / claims (in discussion or disputed with the mill) ----------
+// Marked per party + bill no, kept across re-uploads (stored in settings.diffs). An open
+// item is carved out of that bill's outstanding, so it drops out of overdue, ageing totals
+// and the WhatsApp statements. The bill no may differ from the outstanding report (then it
+// is only tracked) and the amount may be the old outstanding or any other figure.
+// item = { id, party, billNo, type, amount, oldAmt, ref, note, date, status: "open" | "closed" }
+export const DIFF_TYPES = ["Garments Claim", "Rate Diff", "Other Difference"];
+const refKey = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const r2 = (n) => Math.round(n * 100) / 100;
+export function applyDiffs(snap, items) {
+  if (!snap) return snap;
+  const bills = snap.bills.map((b) => ({ ...b }));
+  const diffs = (items || []).map((it) => {
+    if (it.status === "closed") return { ...it, linked: false, applied: 0 };
+    const rk = refKey(it.billNo);
+    const pk = partyKey(it.party);
+    const bill = rk ? bills.find((b) => b.outstanding > 0.004 && partyKey(b.party) === pk && refKey(b.billNo) === rk) : null;
+    if (!bill) return { ...it, linked: false, applied: 0 };
+    const applied = r2(Math.min(Math.max(Number(it.amount) || 0, 0), bill.outstanding));
+    bill.outstanding = r2(bill.outstanding - applied);
+    bill.disputed = r2((bill.disputed || 0) + applied);
+    return { ...it, linked: true, applied };
+  });
+  return { ...snap, bills: bills.filter((b) => !(b.disputed && b.outstanding <= 0.004)), diffs };
 }
 
 // ---------- history (compare with earlier uploads) ----------
@@ -620,6 +646,8 @@ export function buildStatementMessage(group, asOn, opts = {}) {
   } else {
     out.push(`*Total ${onlyOverdue ? "Overdue" : partial ? "Due Invoices" : "Outstanding"}: ${rs(total)}*`);
   }
+
+  if (onlyOverdue && group.diffAmt > 0) out.push(`_Excludes ${rs(group.diffAmt)} under claim / difference (in discussion)._`);
 
   if (showAgeing && !onlyOverdue) {
     const parts = BUCKETS.filter((k) => group.buckets[k.key] > 0).map((k) => `${k.label} days: ${rs(group.buckets[k.key])}`);
