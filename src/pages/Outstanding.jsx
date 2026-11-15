@@ -264,7 +264,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   const effRow = (r) => {
     if (!billSel[r.g.key]) return r;
     const g = subGroup(r.g, new Set(billSel[r.g.key]));
-    return { ...r, g, overdue: overdueAmount(g, settings.creditDays) };
+    return { ...r, g, partial: true, overdue: overdueAmount(g, settings.creditDays) };
   };
   const writeSel = (r, set) => {
     setBillSel((m) => {
@@ -298,7 +298,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
     }
     const name = (ext) => statementFileName(r.g, ext).replace("Statement_", source === "ranjan" ? "Outstanding_" : "Statement_");
     const [pu, iu] = await Promise.all([uploadStatement(pdf, name("pdf")), uploadStatement(png, name("png"))]);
-    return `${statementCaption(r.g, snap.asOn, company)}\n\nStatement (PDF): ${pu}\nStatement (Image): ${iu}`;
+    return `${statementCaption(r.g, snap.asOn, company, r.partial)}\n\nStatement (PDF): ${pu}\nStatement (Image): ${iu}`;
   };
   // One PDF with a page per customer (selected bills only) — for printing / archiving.
   const combinedPdf = async (list) => {
@@ -359,7 +359,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
     }
     setQueue(withPhone.map((r) => ({
       key: r.g.key, name: r.g.name, phone: r.phone,
-      message: buildStatementMessage(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, payment: settings.paymentDetails, ...opts }),
+      message: buildStatementMessage(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, payment: settings.paymentDetails, partial: r.partial, ...opts }),
     })));
   };
 
@@ -736,7 +736,7 @@ function StatementModal({ company, source, row, snap, settings, onClose, showToa
   }, [g, snap, settings.creditDays, settings.footer, settings.paymentDetails, company, ranjan]);
 
   const cur = files?.[fmt];
-  const caption = statementCaption(g, snap.asOn, company);
+  const caption = statementCaption(g, snap.asOn, company, row.partial);
   const base = (kind) => statementFileName(g, kind).replace("Statement_", fmt === "ledger" ? "Outstanding_" : "Statement_");
   const [busy, setBusy] = useState(false);
   // Share-sheet route: the file itself is attached, but WhatsApp asks you to pick the chat.
