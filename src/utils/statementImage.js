@@ -192,8 +192,10 @@ export async function canvasToPdfBlob(canvas) {
   return pdf.output("blob");
 }
 
-export const statementCaption = (group, asOn, company = getCompanyName()) =>
-  `Dear ${group.name},\nPlease find your outstanding statement as on ${fmtDate(asOn)}.\nNet outstanding: ${rs(group.total)}\n\nRegards\n${company}`;
+export const statementCaption = (group, asOn, company = getCompanyName(), partial = false) =>
+  partial
+    ? `Dear ${group.name},\nPlease find your due invoices statement as on ${fmtDate(asOn)}.\nTotal due invoices: ${rs(group.total)}\n\nRegards\n${company}`
+    : `Dear ${group.name},\nPlease find your outstanding statement as on ${fmtDate(asOn)}.\nNet outstanding: ${rs(group.total)}\n\nRegards\n${company}`;
 
 export const statementFileName = (group, ext) => `Statement_${group.name.replace(/\W+/g, "_")}.${ext}`;
 

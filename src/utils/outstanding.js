@@ -597,7 +597,7 @@ export const resolvePhone = (match, link) => link?.phone || match.customer?.phon
 const rs = (n) => `₹${formatCurrency(n)}`;
 
 export function buildStatementMessage(group, asOn, opts = {}) {
-  const { creditDays = 60, onlyOverdue = false, showAgeing = false, footer = DEFAULT_FOOTER, company = getCompanyName() } = opts;
+  const { creditDays = 60, onlyOverdue = false, showAgeing = false, footer = DEFAULT_FOOTER, company = getCompanyName(), partial = false } = opts;
   let bills = group.bills.filter((b) => b.outstanding > 0);
   if (onlyOverdue) bills = bills.filter((b) => b.days > creditDays);
   bills = [...bills].sort((a, b) => a.date.localeCompare(b.date));
@@ -609,14 +609,16 @@ export function buildStatementMessage(group, asOn, opts = {}) {
 
   const out = [company, "", `Dear *${group.name}*,`, "", onlyOverdue
     ? `Following bills are overdue (beyond ${creditDays} days) as on *${fmtDate(asOn)}*:`
-    : `Outstanding statement as on *${fmtDate(asOn)}*:`, "", ...lines, ""];
+    : partial
+      ? `Following due invoices as on *${fmtDate(asOn)}*:`
+      : `Outstanding statement as on *${fmtDate(asOn)}*:`, "", ...lines, ""];
 
-  if (!onlyOverdue && group.advAdj > 0) out.push(`Advance adjusted (oldest bills first): ${rs(group.advAdj)}`);
+  if (!onlyOverdue && !partial && group.advAdj > 0) out.push(`Advance adjusted (oldest bills first): ${rs(group.advAdj)}`);
   if (!onlyOverdue && group.advance > 0) {
     out.push(`Less: Advance / Credit ${rs(group.advance)}`);
-    out.push(`*Net Outstanding: ${rs(total - group.advance)}*`);
+    out.push(`*Net ${partial ? "Due Invoices" : "Outstanding"}: ${rs(total - group.advance)}*`);
   } else {
-    out.push(`*Total ${onlyOverdue ? "Overdue" : "Outstanding"}: ${rs(total)}*`);
+    out.push(`*Total ${onlyOverdue ? "Overdue" : partial ? "Due Invoices" : "Outstanding"}: ${rs(total)}*`);
   }
 
   if (showAgeing && !onlyOverdue) {
