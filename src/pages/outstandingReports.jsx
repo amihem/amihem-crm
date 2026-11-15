@@ -478,7 +478,7 @@ export function MonthTab({ snap, settings, company, filterNote, onDrill }) {
 }
 
 // ======================= Collection Priority =======================
-export function PriorityTab({ rows, settings, snap, company, filterNote, startQueue, onOpen }) {
+export function PriorityTab({ rows, claims = [], settings, snap, company, filterNote, startQueue, onOpen }) {
   const [psort, setPsort] = useState("overdue|-1");
   const [pk, pd] = psort.split("|"), pdir = Number(pd);
   const pval = (r) => (pk === "name" ? r.g.name : pk === "due" ? r.g.due : pk === "oldest" ? r.g.oldest : r.overdue);
@@ -545,6 +545,20 @@ export function PriorityTab({ rows, settings, snap, company, filterNote, startQu
         );
       })}
       {!list.length && <div className="text-center text-sm text-muted py-10 flex flex-col items-center gap-2"><Clock size={22} />No overdue bills 🎉</div>}
+      {claims.length > 0 && (
+        <div className="flex flex-col gap-2 pt-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted">Under claim / difference — not chased ({claims.length} {claims.length > 1 ? "parties" : "party"} · {inr(claims.reduce((t, c) => t + c.amount, 0))})</div>
+          {claims.map((c) => (
+            <div key={c.key} className="bg-white border border-line rounded-xl px-3 py-2 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-semibold text-sm truncate">{c.party}</div>
+                <div className="text-[11px] text-muted">{c.items.map((d) => `${d.type}${d.billNo ? ` · ${d.billNo}` : ""}`).join("  |  ")}</div>
+              </div>
+              <div className="font-bold text-thread whitespace-nowrap">{inr(c.amount)}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
