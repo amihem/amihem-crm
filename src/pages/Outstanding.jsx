@@ -500,7 +500,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
       {tab === "collections" && source === "ranjan" && (
         <CollectionsTab groups={groupParties(snapRaw.bills)} coll={coll} updateColl={updateColl} company={company} showToast={showToast} />
       )}
-      {tab === "differences" && <DifferencesTab items={snapD.diffs || []} totals={diffTotals} company={company} onAdd={() => setDiffModal({})} onReport={() => setReportOpen(true)} onEdit={(d) => setDiffModal({ item: d })} onToggle={toggleDiff} onDelete={(d) => { if (window.confirm(`Delete this ${d.type} entry for ${d.party}?`)) delDiff(d.id); }} />}
+      {tab === "differences" && <DifferencesTab items={snapD.diffs || []} totals={diffTotals} bills={snap.bills} asOn={snap.asOn} onAdd={() => setDiffModal({})} onReport={() => setReportOpen(true)} onEdit={(d) => setDiffModal({ item: d })} onToggle={toggleDiff} onDelete={(d) => { if (window.confirm(`Delete this ${d.type} entry for ${d.party}?`)) delDiff(d.id); }} />}
       {tab === "movement" && <MovementTab snap={snapRaw} company={company} filterNote={fNote} onOpen={setDetailKey} />}
       {tab === "tracker" && (
         <TrackerTab rows={rowsF} rawGroups={rawGroups} coll={coll} updateColl={updateColl} settings={settings} company={company} snap={snap} showToast={showToast} onOpen={setDetailKey} />
@@ -974,12 +974,17 @@ function ClaimReportModal({ items, bills, asOn, company, defaultTo, onClose, sho
   const [busy, setBusy] = useState(false);
   const ref = `CLM/${asOn.replace(/-/g, "")}`;
   const nOpen = items.filter((d) => d.status !== "closed").length;
-  const make = async () => {
+  const make = async (kind) => {
     setBusy(true);
     try {
-      const { buildClaimReportPdf } = await import("../utils/claimReportPdf");
-      const blob = await buildClaimReportPdf({ company, to, ref, asOn, items, bills, signatory: signatory.trim(), includeClosed });
-      downloadBlob(`Claims_Differences_Statement_${asOn}.pdf`, blob);
+      if (kind === "xlsx") {
+        const { downloadClaimExcel } = await import("../utils/claimReportXlsx");
+        downloadClaimExcel({ items, bills, includeClosed }, `Claims_Differences_${asOn}.xlsx`);
+      } else {
+        const { buildClaimReportPdf } = await import("../utils/claimReportPdf");
+        const blob = await buildClaimReportPdf({ company, to, ref, asOn, items, bills, signatory: signatory.trim(), includeClosed });
+        downloadBlob(`Claims_Differences_Statement_${asOn}.pdf`, blob);
+      }
       onClose();
     } catch (e) {
       showToast("Couldn't build the report — please try again.", "error");
@@ -990,7 +995,7 @@ function ClaimReportModal({ items, bills, asOn, company, defaultTo, onClose, sho
   const fld = "mt-1 border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2";
   const lbl = "text-xs font-semibold text-muted uppercase tracking-wide";
   return (
-    <Modal open onClose={onClose} title="Report for Mill — claims & differences">
+    <Modal open onClose={onClose} title="Report for Mill — claims & differences (Excel / PDF)">
       <div className="flex flex-col gap-4">
         <div>
           <label className={lbl}>Addressed to</label>
@@ -1001,10 +1006,11 @@ function ClaimReportModal({ items, bills, asOn, company, defaultTo, onClose, sho
           <input value={signatory} onChange={(e) => setSignatory(e.target.value)} className={fld} />
         </div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeClosed} onChange={(e) => setIncludeClosed(e.target.checked)} /> Also list closed / settled items for reference</label>
-        <p className="text-xs text-muted">Formal letter-style PDF · Ref {ref} · {nOpen} open item{nOpen === 1 ? "" : "s"}: summary by claim type, party-wise details with sub-totals, action requested and signature block.</p>
+        <p className="text-xs text-muted">{nOpen} open item{nOpen === 1 ? "" : "s"} · Ref {ref}. PDF: simple table with total and summary by claim type. Excel: “Claims Detail” (filter + total) and “Summary” sheets.</p>
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper">Cancel</button>
-          <button onClick={make} disabled={busy || !nOpen} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-40">{busy ? "Preparing…" : "Download PDF"}</button>
+          <button onClick={() => make("xlsx")} disabled={busy || !nOpen} className="px-4 py-2 rounded-lg text-sm font-semibold border border-ink text-ink hover:bg-paper disabled:opacity-40">{busy ? "Preparing…" : "Download Excel"}</button>
+          <button onClick={() => make("pdf")} disabled={busy || !nOpen} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-40">{busy ? "Preparing…" : "Download PDF"}</button>
         </div>
       </div>
     </Modal>
@@ -1087,17 +1093,17 @@ function DiffModal({ init, parties, billsOf, onSave, onDelete, onClose }) {
   );
 }
 
-function DifferencesTab({ items, totals, company, onAdd, onReport, onEdit, onToggle, onDelete }) {
+function DifferencesTab({ items, totals, bills = [], asOn, onAdd, onReport, onEdit, onToggle, onDelete }) {
   const [type, setType] = useState("all");
   const [showClosed, setShowClosed] = useState(false);
   const [q, setQ] = useState("");
   const list = items
     .filter((d) => (showClosed || d.status !== "closed") && (type === "all" || d.type === type) && (!q || `${d.party} ${d.billNo} ${d.ref} ${d.note}`.toLowerCase().includes(q.toLowerCase())))
     .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  const exportRows = () => exportExcel(`Differences_${company.replace(/\W+/g, "_")}.xlsx`, "Differences",
-    list.map((d) => ({ party: d.party, type: d.type, billNo: d.billNo, ref: d.ref, oldAmt: d.oldAmt, amount: d.amount, deducted: d.applied, status: d.status === "closed" ? "Closed" : "Open", date: d.date, note: d.note })),
-    [{ key: "party", label: "Party" }, { key: "type", label: "Type" }, { key: "billNo", label: "Bill No" }, { key: "ref", label: "Claim Ref" }, { key: "oldAmt", label: "Old Outstanding" },
-      { key: "amount", label: "Difference Amount" }, { key: "deducted", label: "Excluded from Overdue" }, { key: "status", label: "Status" }, { key: "date", label: "Marked On" }, { key: "note", label: "Note" }]);
+  const exportRows = async () => {
+    const { downloadClaimExcel } = await import("../utils/claimReportXlsx");
+    downloadClaimExcel({ items: list, bills, includeClosed: true }, `Claims_Differences_${asOn}.xlsx`);
+  };
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
