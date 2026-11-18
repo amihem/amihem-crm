@@ -971,6 +971,7 @@ function ClaimReportModal({ items, bills, asOn, company, defaultTo, onClose, sho
   const [to, setTo] = useState(defaultTo);
   const [signatory, setSignatory] = useState("");
   const [includeClosed, setIncludeClosed] = useState(false);
+  const [layout, setLayout] = useState("table"); // PDF: "table" = claim table only, "letter" = official claim letter
   const [busy, setBusy] = useState(false);
   const ref = `CLM/${asOn.replace(/-/g, "")}`;
   const nOpen = items.filter((d) => d.status !== "closed").length;
@@ -982,7 +983,7 @@ function ClaimReportModal({ items, bills, asOn, company, defaultTo, onClose, sho
         downloadClaimExcel({ items, bills, includeClosed }, `Claims_Differences_${asOn}.xlsx`);
       } else {
         const { buildClaimReportPdf } = await import("../utils/claimReportPdf");
-        const blob = await buildClaimReportPdf({ company, to, ref, asOn, items, bills, signatory: signatory.trim(), includeClosed });
+        const blob = await buildClaimReportPdf({ layout, company, to, ref, asOn, items, bills, signatory: signatory.trim(), includeClosed });
         downloadBlob(`Claims_Differences_Statement_${asOn}.pdf`, blob);
       }
       onClose();
@@ -998,15 +999,27 @@ function ClaimReportModal({ items, bills, asOn, company, defaultTo, onClose, sho
     <Modal open onClose={onClose} title="Report for Mill — claims & differences (Excel / PDF)">
       <div className="flex flex-col gap-4">
         <div>
-          <label className={lbl}>Addressed to</label>
-          <textarea value={to} onChange={(e) => setTo(e.target.value)} rows={3} className={fld} />
+          <label className={lbl}>PDF format</label>
+          <div className="flex gap-2 mt-1">
+            {[["table", "Claim table only"], ["letter", "Official claim letter"]].map(([k, t]) => (
+              <button key={k} onClick={() => setLayout(k)} className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold border ${layout === k ? "bg-ink text-white border-ink" : "border-line hover:bg-paper"}`}>{t}</button>
+            ))}
+          </div>
         </div>
-        <div>
-          <label className={lbl}>Authorised signatory name (optional)</label>
-          <input value={signatory} onChange={(e) => setSignatory(e.target.value)} className={fld} />
-        </div>
+        {layout === "letter" && (
+          <>
+            <div>
+              <label className={lbl}>Addressed to</label>
+              <textarea value={to} onChange={(e) => setTo(e.target.value)} rows={3} className={fld} />
+            </div>
+            <div>
+              <label className={lbl}>Authorised signatory name (optional)</label>
+              <input value={signatory} onChange={(e) => setSignatory(e.target.value)} className={fld} />
+            </div>
+          </>
+        )}
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeClosed} onChange={(e) => setIncludeClosed(e.target.checked)} /> Also list closed / settled items for reference</label>
-        <p className="text-xs text-muted">{nOpen} open item{nOpen === 1 ? "" : "s"} · Ref {ref}. PDF: simple table with total and summary by claim type. Excel: “Claims Detail” (filter + total) and “Summary” sheets.</p>
+        <p className="text-xs text-muted">{nOpen} open item{nOpen === 1 ? "" : "s"}. PDF “Claim table only”: heading + one table with total. “Official claim letter”: ref, to, subject, table, summary, action requested, signature. Excel: “Claims Detail” (filter + total) and “Summary” sheets.</p>
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper">Cancel</button>
           <button onClick={() => make("xlsx")} disabled={busy || !nOpen} className="px-4 py-2 rounded-lg text-sm font-semibold border border-ink text-ink hover:bg-paper disabled:opacity-40">{busy ? "Preparing…" : "Download Excel"}</button>
