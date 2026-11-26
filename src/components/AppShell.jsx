@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, FileText, LineChart, Package, FileBarChart, Tags, Wallet, Settings as SettingsIcon, LogOut, Sun, Moon, MoreHorizontal, X } from "lucide-react";
+import { LayoutDashboard, Users, FileText, LineChart, Package, FileBarChart, Tags, Wallet, Settings as SettingsIcon, LogOut, Sun, Moon, Layers, MoreHorizontal, X } from "lucide-react";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useTheme } from "../context/ThemeContext.jsx";
 import OverdueReminderPopup from "./OverdueReminderPopup.jsx";
@@ -26,7 +26,7 @@ const MORE_NAV = [NAV[3], NAV[4], NAV[6], NAV[7]]; // Analytics, Inventory, Repo
 
 export default function AppShell() {
   const { session, permissions, logout } = useAuth();
-  const { theme, toggleTheme } = useTheme();
+  const { theme, toggleTheme, soft, toggleSoft } = useTheme();
   const { pathname } = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
   const moreActive = MORE_NAV.some((n) => pathname === n.to || (n.matchAlso || []).includes(pathname));
@@ -81,6 +81,9 @@ export default function AppShell() {
           <div className={`text-xs text-white/40 pt-3 border-t border-white/10 flex items-center justify-between ${permissions?.canAccessSettings ? "" : "mt-auto"}`}>
             <span className="truncate">{session.name} · {session.role}</span>
             <div className="flex items-center gap-2 shrink-0 ml-2">
+              <button onClick={toggleSoft} className="text-white/60 hover:text-white" aria-label="Toggle soft UI" title={soft ? "Soft UI on — click for classic look" : "Classic look — click for soft UI"}>
+                <Layers size={15} />
+              </button>
               <button onClick={toggleTheme} className="text-white/60 hover:text-white" aria-label="Toggle dark mode">
                 {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
               </button>
@@ -101,6 +104,9 @@ export default function AppShell() {
           <span className="font-display font-extrabold text-base">Amihem CRM</span>
         </div>
         <div className="flex items-center gap-4">
+          <button onClick={toggleSoft} className="text-white/70" aria-label="Toggle soft UI">
+            <Layers size={19} />
+          </button>
           <button onClick={toggleTheme} className="text-white/70" aria-label="Toggle dark mode">
             {theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}
           </button>
