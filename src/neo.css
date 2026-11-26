@@ -1,0 +1,120 @@
+/* ============================================================================
+   Soft UI (neumorphism) theme.
+   Switched on by <html class="neo"> (toggle button in the app; default on).
+   ROLLBACK: click the toggle off, or delete the `import './neo.css'` line in
+   main.jsx — nothing else depends on this file.
+   Cards raise out of the background, inputs sit pressed-in, buttons depress
+   on click. Tables / list rows stay flat so numbers stay easy to read.
+   ============================================================================ */
+
+html.neo {
+  --neo-bg: #E6EBF3;
+  --neo-hi: #FFFFFF;
+  --neo-lo: #C3CBDA;
+  --neo-ink: #1B2340;
+  --neo-soft: #6B7280;
+  --neo-accent: #1E6FE8;
+  --neo-line: rgba(150, 162, 186, 0.32);
+  --neo-raise: 8px 8px 18px var(--neo-lo), -8px -8px 18px var(--neo-hi);
+  --neo-raise-sm: 4px 4px 10px var(--neo-lo), -4px -4px 10px var(--neo-hi);
+  --neo-inset: inset 4px 4px 9px var(--neo-lo), inset -4px -4px 9px var(--neo-hi);
+  --neo-inset-sm: inset 2px 2px 5px var(--neo-lo), inset -2px -2px 5px var(--neo-hi);
+}
+html.neo.dark {
+  --neo-bg: #1D2233;
+  --neo-hi: #272D45;
+  --neo-lo: #11141E;
+  --neo-ink: #EDEDF2;
+  --neo-soft: #9098AC;
+  --neo-accent: #6FA3FF;
+  --neo-line: rgba(255, 255, 255, 0.07);
+}
+
+/* ---- surfaces ---- */
+html.neo body,
+html.neo .bg-paper { background-color: var(--neo-bg); }
+html.neo .bg-white,
+html.neo .bg-panel { background-color: var(--neo-bg); }
+
+/* anything that is a rounded "card" rises; bigger cards rise more */
+html.neo :is(.bg-white, .bg-panel)[class*="rounded"] { box-shadow: var(--neo-raise-sm); }
+html.neo :is(.bg-white, .bg-panel)[class*="rounded-2xl"] { box-shadow: var(--neo-raise); }
+/* small "wells" inside a card look pressed-in */
+html.neo :is(.bg-white, .bg-panel) .bg-paper[class*="rounded"] { box-shadow: var(--neo-inset-sm); }
+
+/* hairline borders become soft dividers; full-border cards lose the border */
+html.neo .border-line { border-color: var(--neo-line); }
+html.neo .border.border-line { border-color: transparent; }
+html.neo .divide-line > :not([hidden]) ~ :not([hidden]) { border-color: var(--neo-line); }
+
+/* friendlier, rounder corners */
+html.neo .rounded-md { border-radius: 0.7rem; }
+html.neo .rounded-lg { border-radius: 0.95rem; }
+html.neo .rounded-xl { border-radius: 1.2rem; }
+html.neo .rounded-2xl { border-radius: 1.6rem; }
+
+/* tables and their rows stay flat */
+html.neo :is(table, thead, tbody, tfoot, tr, th, td).bg-white,
+html.neo :is(table, thead, tbody, tfoot, tr, th, td).bg-panel,
+html.neo :is(table, thead, tbody, tfoot, tr, th, td).bg-paper { box-shadow: none !important; }
+
+/* ---- inputs: pressed in ---- */
+html.neo :is(input, select, textarea):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"])[class*="border"] {
+  background-color: var(--neo-bg);
+  border-color: transparent;
+  box-shadow: var(--neo-inset-sm);
+  color: var(--neo-ink);
+}
+html.neo :is(input, select, textarea):focus { box-shadow: var(--neo-inset); }
+html.neo *:focus-visible { outline-color: var(--neo-accent); }
+html.neo ::placeholder { color: var(--neo-soft); opacity: 0.75; }
+
+/* ---- buttons ---- */
+html.neo :is(button, a, label) { transition: box-shadow 0.15s ease, background-color 0.15s ease, color 0.15s ease; }
+/* primary (dark) buttons */
+html.neo :is(button, a).bg-ink {
+  box-shadow: 5px 5px 12px rgba(27, 35, 64, 0.28), -4px -4px 10px var(--neo-hi);
+}
+html.neo :is(button, a).bg-ink:active:not(:disabled) { box-shadow: inset 3px 3px 7px rgba(0, 0, 0, 0.4); }
+html.neo.dark :is(button, a).bg-ink { background-color: #3A66D6; color: #fff; box-shadow: 5px 5px 12px var(--neo-lo), -4px -4px 10px var(--neo-hi); }
+/* secondary / outline buttons */
+html.neo button.border:not(.bg-ink):is(.border-line, .border-ink) {
+  background-color: var(--neo-bg);
+  border-color: transparent;
+  box-shadow: var(--neo-raise-sm);
+}
+html.neo button.border:not(.bg-ink):is(.border-line, .border-ink):active:not(:disabled) { box-shadow: var(--neo-inset-sm); }
+html.neo button:disabled { box-shadow: none !important; }
+
+/* ---- modal backdrop a little softer ---- */
+html.neo .backdrop-blur-sm { backdrop-filter: blur(6px); }
+
+/* ---- sidebar + mobile bars: light, raised, accent on the active item ---- */
+html.neo aside.bg-ink {
+  background-color: var(--neo-bg);
+  color: var(--neo-ink);
+  box-shadow: 10px 0 22px -8px var(--neo-lo);
+}
+html.neo header.bg-ink {
+  background-color: var(--neo-bg);
+  color: var(--neo-ink);
+  box-shadow: 0 8px 18px -8px var(--neo-lo);
+}
+html.neo :is(aside, header) [class*="text-white"] { color: var(--neo-soft); }
+html.neo :is(aside, header) :is(a, button):hover[class*="text-white"] { color: var(--neo-ink); }
+html.neo :is(aside, header) div[class*="bg-white/10"] { background-color: var(--neo-bg); box-shadow: var(--neo-raise-sm); color: var(--neo-accent); }
+html.neo :is(aside, header) div[class*="bg-white/10"] span { color: var(--neo-accent); }
+html.neo aside a:hover { box-shadow: var(--neo-raise-sm); }
+html.neo aside a[class*="bg-white/10"] { background-color: var(--neo-bg); box-shadow: var(--neo-inset-sm); color: var(--neo-accent); }
+html.neo aside [class*="border-white"] { border-color: var(--neo-line); }
+html.neo nav.bg-panel { box-shadow: 0 -8px 18px -8px var(--neo-lo); }
+
+/* ---- scrollbar ---- */
+html.neo ::-webkit-scrollbar-thumb { background-color: var(--neo-lo); }
+
+/* ---- login page: soft decorative circles ---- */
+html.neo .neo-deco { position: relative; overflow: hidden; }
+html.neo .neo-deco::before,
+html.neo .neo-deco::after { content: ""; position: absolute; border-radius: 50%; background: var(--neo-bg); pointer-events: none; }
+html.neo .neo-deco::before { width: 280px; height: 280px; left: -90px; top: 10%; box-shadow: var(--neo-raise); }
+html.neo .neo-deco::after { width: 200px; height: 200px; right: -60px; bottom: 6%; box-shadow: var(--neo-raise); }

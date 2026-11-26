@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import './index.css'
+import './neo.css' // soft UI theme — delete this line (or toggle it off in the app) to roll back
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 
