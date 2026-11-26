@@ -125,8 +125,8 @@ function SupabaseLogin({ onSignedIn }) {
 
 function Shell({ children }) {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-paper p-4">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen flex items-center justify-center bg-paper p-4 neo-deco">
+      <div className="w-full max-w-sm relative z-10">
         <div className="flex flex-col items-center mb-6">
           <div className="w-14 h-14 rounded-2xl bg-ink flex items-center justify-center mb-3 shadow-sm">
             <span className="text-white font-display font-extrabold text-xl">A</span>
