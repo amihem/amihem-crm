@@ -1,0 +1,1277 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Upload, MessageCircle, Phone, Search, Link2, Download, AlertTriangle,
+  CheckCircle2, Wallet, Users, Clock, Settings2, FileText, Send, Share2, Scale,
+} from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from "recharts";
+import { useCustomers } from "../context/domains.jsx";
+import { useToast } from "../context/ToastContext.jsx";
+import { isSupabaseConfigured } from "../services/supabaseClient";
+import { pullState, pushState, isSetupError, uploadStatement } from "../services/outstandingSync";
+import Modal from "../components/Modal.jsx";
+import { SummaryTab, BillsTab, MonthTab, PriorityTab, MovementTab } from "./outstandingReports.jsx";
+import InsightsTab from "./outstandingInsights.jsx";
+import PaymentPlanTab from "./outstandingPlan.jsx";
+import DrillModal from "./outstandingDrill.jsx";
+import CollectionsTab from "./outstandingCollections.jsx";
+import TrackerTab from "./outstandingTracker.jsx";
+import ReportFilters, { EMPTY_FILTERS, applyFilters, filterNote, filtersActive } from "./outstandingFilters.jsx";
+import KpiCard from "../components/KpiCard.jsx";
+import SearchDropdown from "../components/SearchDropdown.jsx";
+import { buildWhatsAppLink } from "../services/whatsapp";
+import { buildPDF, formatCurrency, downloadBlob } from "../utils/helpers";
+import { buildLedgerPages, ledgerPdfBlob, ledgerPageCanvas } from "../utils/ledgerPdf";
+import { RANJAN_LOGO } from "../assets/ranjanLogo";
+import {
+  renderStatementCanvas, canvasToBlob, canvasToPdfBlob, statementCaption, statementFileName,
+  shareStatementFile, downloadBlob as saveBlob,
+} from "../utils/statementImage";
+import {
+  BUCKETS, bucketOf, fmtDate, groupParties, overdueAmount, matchParty, resolvePhone,
+  buildStatementMessage, parseOutstandingFile, diffDays, exportExcel,
+  loadSnapshot, saveSnapshot, loadLinks, saveLinks, loadSent, saveSent,
+  loadSettings, saveSettings, DEFAULT_FOOTER, compactINR, summaryMessage, SOURCES, companyFor, loadCollections, saveCollections,
+  billKey, subGroup, nextHistory, fifoSnapshot, riskOf,
+  fyBreakup, fyStartYear, fyEndDate, DIFF_TYPES, applyDiffs, partyKey, todayIso,
+} from "../utils/outstanding";
+
+const inr = (n) => `₹${formatCurrency(n)}`;
+const TABS = [
+  { id: "statements", label: "Statements · WhatsApp" },
+  { id: "summary", label: "Ageing Summary" },
+  { id: "bills", label: "Bill-wise Ageing" },
+  { id: "month", label: "Month-wise" },
+  { id: "priority", label: "Collection Priority" },
+  { id: "plan", label: "Payment Plan" },
+  { id: "movement", label: "Movement" },
+  { id: "insights", label: "Insights" },
+  { id: "tracker", label: "Payment Tracker" },
+  { id: "differences", label: "Differences / Claims" },
+  { id: "collections", label: "Collections & Advice" },
+];
+
+function DaysBadge({ days }) {
+  const b = bucketOf(days);
+  return (
+    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: `${b.color}1F`, color: b.color }}>
+      {days}d
+    </span>
+  );
+}
+
+export default function Outstanding() {
+  const [source, setSource] = useState(() => {
+    try { return localStorage.getItem("amihem_crm_outstanding_source") || "navkar"; } catch { return "navkar"; }
+  });
+  const pick = (id) => {
+    setSource(id);
+    try { localStorage.setItem("amihem_crm_outstanding_source", id); } catch { /* ignore */ }
+  };
+  const [, bump] = useState(0);
+  const stat = (id) => {
+    const sn = loadSnapshot(id);
+    return sn ? { net: sn.bills.reduce((t, x) => t + x.outstanding, 0), asOn: sn.asOn } : null;
+  };
+  const bar = (
+    <div className="grid grid-cols-2 gap-2">
+      {SOURCES.map((c) => {
+        const st = stat(c.id);
+        const on = source === c.id;
+        return (
+          <button key={c.id} onClick={() => pick(c.id)}
+            className={`text-left rounded-xl border-2 px-4 py-3 transition ${on ? "border-ink bg-ink text-white" : "border-line bg-panel hover:border-ink2/40"}`}>
+            <div className="text-sm font-bold">{c.label}</div>
+            <div className={`text-xs mt-0.5 ${on ? "text-white/70" : "text-muted"}`}>
+              {st ? `${compactINR(st.net)} · ${fmtDate(st.asOn)}` : "No report yet"}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+  return <OutstandingSource key={source} source={source} sourceBar={bar} onUpdate={() => bump((n) => n + 1)} />;
+}
+
+function OutstandingSource({ source, sourceBar, onUpdate }) {
+  const cfg = SOURCES.find((c) => c.id === source) || SOURCES[0];
+  const { items: customers } = useCustomers();
+  const showToast = useToast();
+  const fileRef = useRef(null);
+
+  const [snapRaw, setSnap] = useState(() => loadSnapshot(source));
+  const [asOnPick, setAsOnPick] = useState(null); // back-dated view (null = report date)
+  // Back-dated view: bills after the chosen date are dropped and ageing is recounted
+  // from that date. Amounts stay as per the uploaded report (later payments are not undone).
+  const backdated = !!(snapRaw && asOnPick && asOnPick < snapRaw.asOn);
+  const snapBase = useMemo(() => {
+    if (!snapRaw || !backdated) return snapRaw;
+    return {
+      ...snapRaw,
+      asOn: asOnPick,
+      bills: snapRaw.bills.filter((b) => b.date <= asOnPick).map((b) => ({ ...b, days: Math.max(0, diffDays(asOnPick, b.date)) })),
+    };
+  }, [snapRaw, asOnPick, backdated]);
+  const [links, setLinks] = useState(() => loadLinks(source));
+  const [sent, setSent] = useState(() => loadSent(source));
+  const [settings, setSettings] = useState(() => loadSettings(source));
+  // Advance / receipts are set off against each customer's oldest bills first (FIFO).
+  const snap = useMemo(() => (snapBase && settings.fifoAdvance !== false ? fifoSnapshot(snapBase) : snapBase), [snapBase, settings.fifoAdvance]);
+  // Claims / differences in discussion with the mill only affect the overdue view (Collection Priority,
+  // overdue reminders). Every other report keeps using `snap` unchanged.
+  const snapD = useMemo(() => applyDiffs(snap, settings.diffs), [snap, settings.diffs]);
+  const rawGroups = useMemo(() => (snapBase ? groupParties(snapBase.bills) : []), [snapBase]);
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [tab, setTab] = useState("statements");
+  const [busy, setBusy] = useState(false);
+  const [drag, setDrag] = useState(false);
+  const [queue, setQueue] = useState(null); // [{key,name,phone,message}]
+  const [linking, setLinking] = useState(null); // group being linked
+  const [showSettings, setShowSettings] = useState(false);
+  const [detailKey, setDetailKey] = useState(null);
+  const [drill, setDrill] = useState(null); // { title, bills } — bill-wise popup opened from report amounts
+  const [stmtKey, setStmtKey] = useState(null);
+  const [prep, setPrep] = useState(null);
+  const company = companyFor(source, snap);
+  const [coll, setColl] = useState(() => loadCollections(source));
+  const updateColl = (fn) => {
+    const next = { ...fn(coll), updatedAt: new Date().toISOString() };
+    setColl(next);
+    saveCollections(next, source);
+    pushCloud({ collections: next });
+  };
+  const [sync, setSync] = useState(isSupabaseConfigured ? "syncing" : "off");
+
+  const pushCloud = (patch) => {
+    if (!isSupabaseConfigured) return;
+    setSync("syncing");
+    pushState(source, patch).then(() => setSync("ok")).catch((e) => setSync(isSetupError(e) ? "setup" : "error"));
+  };
+
+  // Cloud is the source of truth; localStorage is just the instant cache.
+  // First device to open this after setup uploads what it already has.
+  useEffect(() => {
+    if (!isSupabaseConfigured) return undefined;
+    let dead = false;
+    const pull = async () => {
+      try {
+        const remote = await pullState(source);
+        if (dead) return;
+        const local = loadSnapshot(source);
+        const lc = loadCollections(source);
+        const rc = remote?.collections || {};
+        if (remote) {
+          if ((lc.updatedAt || "") > (rc.updatedAt || "")) await pushState(source, { collections: lc });
+          else if (rc.updatedAt && rc.updatedAt !== lc.updatedAt) { saveCollections({ ...lc, ...rc }, source); setColl(loadCollections(source)); }
+        }
+        const all = () => ({ snapshot: local, links: loadLinks(source), sent: loadSent(source), settings: loadSettings(source) });
+        if (!remote) {
+          if (local || lc.updatedAt) await pushState(source, { ...(local ? all() : {}), ...(lc.updatedAt ? { collections: lc } : {}) });
+          if (!dead) setSync("ok");
+          return;
+        }
+        if (local && (local.uploadedAt || "") > (remote.snapshot?.uploadedAt || "")) {
+          await pushState(source, all());
+          if (!dead) setSync("ok");
+          return;
+        }
+        if (remote.snapshot) { saveSnapshot(remote.snapshot, source); setSnap(remote.snapshot); onUpdate?.(); }
+        saveLinks(remote.links || {}, source); setLinks(remote.links || {});
+        saveSent(remote.sent || {}, source); setSent(remote.sent || {});
+        saveSettings(remote.settings || {}, source); setSettings(loadSettings(source));
+        setSync("ok");
+      } catch (e) {
+        if (!dead) setSync(isSetupError(e) ? "setup" : "error");
+      }
+    };
+    pull();
+    const onVis = () => { if (document.visibilityState === "visible") pull(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { dead = true; document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+
+  const groups = useMemo(() => (snap ? groupParties(snap.bills) : []), [snap]);
+  const groupsD = useMemo(() => {
+    const m = {};
+    groupParties(snapD?.bills || []).forEach((g) => { m[g.key] = g; });
+    return m;
+  }, [snapD]);
+  const diffTotals = useMemo(() => {
+    const t = { applied: 0, tracked: 0, open: 0, byType: Object.fromEntries(DIFF_TYPES.map((x) => [x, 0])) };
+    (snapD?.diffs || []).forEach((d) => {
+      if (d.status === "closed") return;
+      t.open++;
+      t.byType[d.type] = (t.byType[d.type] || 0) + (Number(d.amount) || 0);
+      if (d.linked) t.applied += d.applied; else t.tracked += Number(d.amount) || 0;
+    });
+    return t;
+  }, [snapD]);
+  const rows = useMemo(
+    () =>
+      groups.map((g) => {
+        const link = links[g.key];
+        const match = matchParty(g, customers, links);
+        const fi = snap?.fifo?.[g.name];
+        const gg = fi ? { ...g, advAdj: fi.adjusted, advRefs: fi.refs } : g;
+        const overdue = overdueAmount(gg, settings.creditDays);
+        const gD0 = groupsD[g.key];
+        const gD = gD0 ? { ...gD0, advAdj: gg.advAdj, advRefs: gg.advRefs } : null; // same party with open claims carved out
+        const overdueNet = gD ? overdueAmount(gD, settings.creditDays) : 0;
+        if (gD) gD.diffAmt = Math.round((overdue - overdueNet) * 100) / 100;
+        return { g: gg, gD, match, link, phone: resolvePhone(match, link), overdue, overdueNet };
+      }),
+    [groups, customers, links, settings.creditDays, snap, groupsD]
+  );
+
+  const totals = useMemo(() => {
+    const t = { net: 0, due: 0, advance: 0, overdue: 0, buckets: Object.fromEntries(BUCKETS.map((b) => [b.key, 0])) };
+    rows.forEach(({ g, overdue }) => {
+      t.net += g.total; t.due += g.due; t.advance += g.advance; t.overdue += overdue;
+      BUCKETS.forEach((b) => (t.buckets[b.key] += g.buckets[b.key]));
+    });
+    return t;
+  }, [rows]);
+
+  // report tabs work on the filtered parties
+  const rowsF = useMemo(() => applyFilters(rows, filters), [rows, filters]);
+  const namesF = useMemo(() => new Set(rowsF.map((r) => r.g.name)), [rowsF]);
+  // Collection Priority works on the overdue view: open claims carved out, claim parties listed separately.
+  const rowsPri = useMemo(() => rowsF.filter((r) => r.gD).map((r) => ({ ...r, g: r.gD, overdue: r.overdueNet })), [rowsF]);
+  const claimRows = useMemo(() => {
+    const keysF = new Set(rowsF.map((r) => r.g.key));
+    const m = new Map();
+    (snapD?.diffs || []).filter((d) => d.status !== "closed").forEach((d) => {
+      const k = partyKey(d.party);
+      if (filtersActive(filters) && !keysF.has(k)) return;
+      if (!m.has(k)) m.set(k, { key: k, party: d.party, items: [], amount: 0 });
+      const c = m.get(k); c.items.push(d); c.amount += Number(d.amount) || 0;
+    });
+    return [...m.values()].sort((a, b) => b.amount - a.amount);
+  }, [snapD, rowsF, filters]);
+  const snapF = useMemo(() => (snap && filtersActive(filters) ? { ...snap, bills: snap.bills.filter((b) => namesF.has(b.party)) } : snap), [snap, filters, namesF]);
+  const totalsF = useMemo(() => {
+    const t = { net: 0, due: 0, advance: 0, overdue: 0, buckets: Object.fromEntries(BUCKETS.map((b) => [b.key, 0])) };
+    rowsF.forEach(({ g, overdue }) => {
+      t.net += g.total; t.due += g.due; t.advance += g.advance; t.overdue += overdue;
+      BUCKETS.forEach((b) => (t.buckets[b.key] += g.buckets[b.key]));
+    });
+    return t;
+  }, [rowsF]);
+  const fNote = filterNote(filters);
+  const REPORT_TABS = ["summary", "bills", "month", "priority", "tracker"];
+
+  const shareSummary = async () => {
+    const text = summaryMessage(rows, totals, snap.asOn, settings.creditDays, company);
+    if (navigator.share) { try { await navigator.share({ text }); } catch { /* cancelled */ } return; }
+    try { await navigator.clipboard.writeText(text); showToast("Summary copied"); } catch { showToast("Couldn't copy", "error"); }
+  };
+
+  // ---------- upload ----------
+  const handleFile = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const parsed = await parseOutstandingFile(file, source);
+      parsed.history = nextHistory(snapRaw, parsed);
+      if (!saveSnapshot(parsed, source)) showToast("Loaded, but couldn't be saved on this device (storage full).", "error");
+      saveSent({}, source); setSent({});
+      setSnap(parsed);
+      onUpdate?.();
+      pushCloud({ snapshot: parsed, sent: {} });
+      showToast(`${parsed.bills.length} bills · ${groupParties(parsed.bills).length} parties loaded (as on ${fmtDate(parsed.asOn)})`);
+    } catch (err) {
+      showToast(err.message || "Couldn't read that file.", "error");
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const updateLink = (key, link) => {
+    const next = { ...links };
+    if (link) next[key] = link; else delete next[key];
+    setLinks(next); saveLinks(next, source); pushCloud({ links: next });
+  };
+  const markSent = (key) => {
+    const next = { ...sent, [key]: new Date().toISOString() };
+    setSent(next); saveSent(next, source); pushCloud({ sent: next });
+  };
+  const updateSettings = (s) => { setSettings(s); saveSettings(s, source); pushCloud({ settings: s }); };
+  // ----- differences / claims (stored inside settings.diffs so they sync like the other settings) -----
+  const [diffModal, setDiffModal] = useState(null); // { item?, party?, bill? }
+  const [reportOpen, setReportOpen] = useState(false); // formal claim report for the mill
+  const writeDiffs = (list) => updateSettings({ ...settings, diffs: list });
+  const saveDiff = (item) => {
+    const list = settings.diffs || [];
+    writeDiffs(list.some((d) => d.id === item.id) ? list.map((d) => (d.id === item.id ? item : d)) : [...list, item]);
+    setDiffModal(null);
+    showToast(`${item.type} marked — ${inr(item.amount)} kept out of outstanding`);
+  };
+  const toggleDiff = (id) => writeDiffs((settings.diffs || []).map((d) => (d.id === id ? { ...d, status: d.status === "closed" ? "open" : "closed", closedOn: d.status === "closed" ? "" : todayIso() } : d)));
+  const delDiff = (id) => { writeDiffs((settings.diffs || []).filter((d) => d.id !== id)); setDiffModal(null); };
+  // ----- payment plan for customers beyond N days (settings.payPlan, synced like the other settings) -----
+  const setPlan = (key, name, patch) => {
+    const all = settings.payPlan || {};
+    updateSettings({ ...settings, payPlan: { ...all, [key]: { ...(all[key] || {}), name, ...patch, updatedAt: todayIso() } } });
+  };
+  const diffsOfParty = (key) => (settings.diffs || []).filter((d) => partyKey(d.party) === key);
+
+  const lockMsg = () => showToast("Back-dated view is for viewing only — set the date back to the report date to send statements.", "info");
+  // ---------- bill-wise selection (which invoices go out on WhatsApp) ----------
+  const [billSel, setBillSel] = useState({}); // partyKey -> [billKey]; absent = every bill
+  const allKeys = (g) => g.bills.map(billKey);
+  const selSet = (g) => new Set(billSel[g.key] || allKeys(g));
+  const effRow = (r) => {
+    if (!billSel[r.g.key]) return r;
+    const g = subGroup(r.g, new Set(billSel[r.g.key]));
+    return { ...r, g, partial: true, overdue: overdueAmount(g, settings.creditDays) };
+  };
+  const writeSel = (r, set) => {
+    setBillSel((m) => {
+      const n = { ...m };
+      if (set.size === r.g.bills.length) delete n[r.g.key]; else n[r.g.key] = [...set];
+      return n;
+    });
+  };
+  const toggleBill = (r, b) => {
+    const set = selSet(r.g);
+    const k = billKey(b);
+    set.has(k) ? set.delete(k) : set.add(k);
+    writeSel(r, set);
+  };
+  const setBills = (r, mode) => {
+    if (mode === "all") writeSel(r, new Set(allKeys(r.g)));
+    else if (mode === "none") writeSel(r, new Set());
+    else writeSel(r, new Set(r.g.bills.filter((b) => b.outstanding > 0 && b.days > settings.creditDays).map(billKey)));
+  };
+
+  // Build the customer's PDF + image, store them online and return the WhatsApp message with both links.
+  const makeLinkMessage = async (r) => {
+    let pdf, png;
+    if (source === "ranjan") {
+      const pages = buildLedgerPages(r.g, snap, { format: "ranjan", company, logo: true });
+      pdf = await ledgerPdfBlob(pages, RANJAN_LOGO);
+      png = await canvasToBlob(await ledgerPageCanvas(pages[0], RANJAN_LOGO, 2.2, pages.length === 1));
+    } else {
+      const card = renderStatementCanvas(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, payment: settings.paymentDetails });
+      [pdf, png] = await Promise.all([canvasToPdfBlob(card), canvasToBlob(card)]);
+    }
+    const name = (ext) => statementFileName(r.g, ext).replace("Statement_", source === "ranjan" ? "Outstanding_" : "Statement_");
+    const [pu, iu] = await Promise.all([uploadStatement(pdf, name("pdf")), uploadStatement(png, name("png"))]);
+    return `${statementCaption(r.g, snap.asOn, company, r.partial)}\n\nStatement (PDF): ${pu}\nStatement (Image): ${iu}`;
+  };
+  // One PDF with a page per customer (selected bills only) — for printing / archiving.
+  const combinedPdf = async (list) => {
+    try {
+      setPrep("Building PDF…");
+      const ranjan = source === "ranjan";
+      const pages = [];
+      list.map(effRow).filter((r) => r.g.bills.length).forEach((r) => pages.push(...buildLedgerPages(r.g, snap, { format: ranjan ? "ranjan" : "generic", company, logo: ranjan })));
+      if (!pages.length) { showToast("Nothing to export.", "error"); return; }
+      downloadBlob(`Outstanding_${source}_${snap.asOn}.pdf`, await ledgerPdfBlob(pages, ranjan ? RANJAN_LOGO : null));
+    } catch (e) {
+      showToast("Couldn't build the PDF.", "error");
+    } finally {
+      setPrep(null);
+    }
+  };
+  const linkError = () => showToast("Couldn't create the links — run supabase/outstanding.sql once, then retry.", "error");
+
+  // One tap: create PDF + image, then open the customer's own WhatsApp chat with both links ready to send.
+  const quickSend = async (r0) => {
+    const r = effRow(r0);
+    if (backdated) { lockMsg(); return; }
+    if (!r.g.bills.length) { showToast("Select at least one bill.", "error"); return; }
+    if (!r.phone) { showToast("No phone number linked for this customer.", "error"); return; }
+    try {
+      setPrep(`Preparing ${r.g.name}…`);
+      const text = await makeLinkMessage(r);
+      markSent(r.g.key);
+      const l = buildWhatsAppLink(r.phone, text);
+      if (!window.open(l, "_blank")) window.location.href = l;
+    } catch (e) {
+      linkError();
+    } finally {
+      setPrep(null);
+    }
+  };
+
+  const startQueue = async (list0, opts) => {
+    if (backdated) { lockMsg(); return; }
+    const list = list0.map((r) => (opts?.onlyOverdue && !billSel[r.g.key] ? { ...r, g: r.gD || { ...r.g, bills: [] } } : r)).map(effRow);
+    const withPhone = list.filter((r) => r.phone && r.g.bills.length);
+    if (!withPhone.length) { showToast("No phone number available for the selected parties.", "error"); return; }
+    if (withPhone.length < list.length) showToast(`${list.length - withPhone.length} skipped — no phone number.`, "info");
+    if (opts?.links) {
+      try {
+        const items = [];
+        for (let i = 0; i < withPhone.length; i++) {
+          setPrep(`Preparing ${i + 1} of ${withPhone.length}…`);
+          items.push({ key: withPhone[i].g.key, name: withPhone[i].g.name, phone: withPhone[i].phone, message: await makeLinkMessage(withPhone[i]) });
+        }
+        setQueue(items);
+      } catch (e) {
+        linkError();
+      } finally {
+        setPrep(null);
+      }
+      return;
+    }
+    setQueue(withPhone.map((r) => ({
+      key: r.g.key, name: r.g.name, phone: r.phone,
+      message: buildStatementMessage(r.g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, payment: settings.paymentDetails, partial: r.partial, ...opts }),
+    })));
+  };
+
+  // ---------- empty state ----------
+  if (!snap) {
+    return (
+      <div className="flex flex-col gap-5">
+        {sourceBar}
+        <Header />
+        <div className="text-xs -mt-3"><SyncBadge sync={sync} /></div>
+        <div
+          onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => { e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files?.[0]); }}
+          className={`border-2 border-dashed rounded-2xl p-10 sm:p-16 text-center bg-panel transition ${drag ? "border-ink2 bg-ink2/5" : "border-line"}`}
+        >
+          <div className="w-14 h-14 rounded-2xl bg-ink/10 text-ink flex items-center justify-center mx-auto mb-4"><Upload size={26} /></div>
+          <h2 className="font-display font-bold text-lg">Upload {cfg.label} outstanding</h2>
+          <p className="text-sm text-muted mt-1 max-w-md mx-auto">
+            {cfg.hint}
+          </p>
+          <button onClick={() => fileRef.current?.click()} disabled={busy} className="mt-5 bg-ink text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-ink2 transition disabled:opacity-50">
+            {busy ? "Reading…" : "Choose file"}
+          </button>
+          <input ref={fileRef} type="file" accept={cfg.accept} className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
+        </div>
+      </div>
+    );
+  }
+
+  const unmatched = rows.filter((r) => r.match.status !== "auto" && r.g.total > 0).length;
+
+  return (
+    <div className="flex flex-col gap-5">
+      {sourceBar}
+      <Header>
+        <button onClick={shareSummary} className="p-2 rounded-lg border border-line hover:bg-paper" aria-label="Share summary"><Share2 size={16} /></button>
+        <button onClick={() => setShowSettings(true)} className="p-2 rounded-lg border border-line hover:bg-paper" aria-label="Settings"><Settings2 size={16} /></button>
+        <button onClick={() => fileRef.current?.click()} disabled={busy} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-ink2 transition flex items-center gap-2 disabled:opacity-50">
+          <Upload size={15} /> {busy ? "Reading…" : "Upload new"}
+        </button>
+        <input ref={fileRef} type="file" accept={cfg.accept} className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
+      </Header>
+
+      <div className="text-xs text-muted -mt-3 flex items-center gap-x-2 gap-y-1 flex-wrap">
+        <span>As on</span>
+        <input type="date" value={snap.asOn} max={snapRaw.asOn} onChange={(e) => setAsOnPick(e.target.value && e.target.value < snapRaw.asOn ? e.target.value : null)}
+          className="border border-line rounded-md px-2 py-1 text-xs font-bold text-ink bg-white" aria-label="As on date" />
+        {backdated && <button onClick={() => setAsOnPick(null)} className="font-semibold text-ink2 underline">Latest ({fmtDate(snapRaw.asOn)})</button>}
+        <span>· {snapRaw.fileName} ·</span> <SyncBadge sync={sync} />
+      </div>
+      {backdated && (
+        <div className="bg-thread/10 border border-thread/30 text-thread rounded-xl px-3 py-2 text-xs font-semibold -mt-2">
+          Back-dated view as on {fmtDate(asOnPick)} — ageing recounted and later bills hidden. Payments received after this date are not added back, so totals are an estimate. Sending is switched off.
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <KpiCard label="Net Outstanding" value={compactINR(totals.net)} icon={Wallet} sub={`${inr(totals.net)} · ${groups.length} parties`} />
+        <KpiCard label={`Overdue > ${settings.creditDays}d`} value={compactINR(totals.overdue)} tone="rust" icon={AlertTriangle} sub={`${totals.due ? Math.round((totals.overdue / totals.due) * 100) : 0}% of dues`} />
+        <KpiCard label="Advance / Credit" value={compactINR(totals.advance)} tone="loom" icon={CheckCircle2} sub="adjusted in net" />
+        <KpiCard label="Under Difference / Claim" value={compactINR(diffTotals.applied)} tone="thread" icon={Scale} sub={diffTotals.open ? `${diffTotals.open} open · not chased in overdue` : "none marked"} />
+        <KpiCard label="Not linked to master" value={unmatched} tone={unmatched ? "thread" : "loom"} icon={Users} sub={unmatched ? "link before sending" : "all matched"} />
+      </div>
+
+      <FYOutstandingCard bills={snap.bills} asOn={snap.asOn} onDrill={setDrill} />
+
+      <div className="flex gap-1 overflow-x-auto border-b border-line">
+        {TABS.filter((t) => t.id !== "collections" || source === "ranjan").map((t) => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={`px-4 py-2.5 text-sm font-semibold whitespace-nowrap border-b-2 -mb-px transition ${tab === t.id ? "border-ink text-ink" : "border-transparent text-muted hover:text-ink"}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "statements" && (
+        <StatementsTab billSel={billSel} selSet={selSet} onBill={toggleBill} onBills={setBills} onCombined={combinedPdf} onQuick={quickSend} onStatement={(k) => (backdated ? lockMsg() : setStmtKey(k))} onMark={(r, b) => setDiffModal({ party: r.g.name, bill: b })} onEditDiff={(d) => setDiffModal({ item: d })} diffsOf={(r) => diffsOfParty(r.g.key)} onOpen={setDetailKey} rows={rows} sent={sent} settings={settings} snap={snap} startQueue={startQueue}
+          onLink={setLinking} onConfirm={(r) => updateLink(r.g.key, { ...(r.link || {}), customerId: r.match.customer.id })}
+          showToast={showToast} />
+      )}
+      {REPORT_TABS.includes(tab) && (
+        <ReportFilters names={rows.map((r) => r.g.name).sort((a, b) => a.localeCompare(b))} value={filters} onChange={setFilters} shown={rowsF.length} total={rows.length} />
+      )}
+      {tab === "summary" && <SummaryTab rows={rowsF} totals={totalsF} snap={snapF} settings={settings} company={company} filterNote={fNote} onOpen={setDetailKey} />}
+      {tab === "bills" && <BillsTab snap={snapF} settings={settings} company={company} filterNote={fNote} onOpen={setDetailKey} />}
+      {tab === "month" && <MonthTab snap={snapF} settings={settings} company={company} filterNote={fNote} onDrill={setDrill} />}
+      {tab === "collections" && source === "ranjan" && (
+        <CollectionsTab groups={groupParties(snapRaw.bills)} coll={coll} updateColl={updateColl} company={company} showToast={showToast} />
+      )}
+      {tab === "differences" && <DifferencesTab items={snapD.diffs || []} totals={diffTotals} bills={snap.bills} asOn={snap.asOn} onAdd={() => setDiffModal({})} onReport={() => setReportOpen(true)} onEdit={(d) => setDiffModal({ item: d })} onToggle={toggleDiff} onDelete={(d) => { if (window.confirm(`Delete this ${d.type} entry for ${d.party}?`)) delDiff(d.id); }} />}
+      {tab === "plan" && <PaymentPlanTab bills={snapD.bills} asOn={snap.asOn} company={company} days={settings.planDays || 120} onDays={(n) => updateSettings({ ...settings, planDays: n })} plan={settings.payPlan || {}} onChange={setPlan} showToast={showToast} />}
+      {tab === "insights" && <InsightsTab snap={snapF} history={snapRaw.history || []} settings={settings} coll={coll} claims={(snapD.diffs || []).filter((d) => d.status !== "closed")} source={source} />}
+      {tab === "movement" && <MovementTab snap={snapRaw} company={company} filterNote={fNote} onOpen={setDetailKey} />}
+      {tab === "tracker" && (
+        <TrackerTab rows={rowsF} rawGroups={rawGroups} coll={coll} updateColl={updateColl} settings={settings} company={company} snap={snap} showToast={showToast} onOpen={setDetailKey} />
+      )}
+      {tab === "priority" && <PriorityTab rows={rowsPri} claims={claimRows} settings={settings} snap={snapF} company={company} filterNote={fNote} startQueue={startQueue} onOpen={setDetailKey} />}
+
+      {drill && <DrillModal drill={drill} onClose={() => setDrill(null)} onOpenParty={setDetailKey} />}
+      {detailKey && rows.find((r) => r.g.key === detailKey) && (
+        <PartyDetail row={rows.find((r) => r.g.key === detailKey)} settings={settings} snap={snap}
+          onClose={() => setDetailKey(null)}
+          onStatement={(r) => { if (backdated) { lockMsg(); return; } setDetailKey(null); setStmtKey(r.g.key); }}
+          onSend={(r, o) => { setDetailKey(null); startQueue([r], o); }} />
+      )}
+      {stmtKey && rows.find((r) => r.g.key === stmtKey) && (
+        <StatementModal company={company} source={source} row={effRow(rows.find((r) => r.g.key === stmtKey))} snap={snap} settings={settings} onClose={() => setStmtKey(null)} showToast={showToast} />
+      )}
+      {prep && (
+        <div className="fixed inset-x-0 bottom-24 flex justify-center z-50 pointer-events-none">
+          <div className="bg-ink text-white text-sm font-semibold px-4 py-2 rounded-full shadow-lg">{prep}</div>
+        </div>
+      )}
+      {queue && <SendModal queue={queue} onSent={markSent} onClose={() => setQueue(null)} />}
+      {linking && (
+        <LinkModal group={linking} customers={customers} link={links[linking.key]}
+          onSave={(l) => { updateLink(linking.key, l); setLinking(null); }}
+          onClose={() => setLinking(null)} />
+      )}
+      {reportOpen && <ClaimReportModal items={snapD.diffs || []} bills={snap.bills} asOn={snap.asOn} company={company} defaultTo={source === "ranjan" && snap.company ? `The Manager (Accounts)\n${companyFor(source, snap)}` : "The Manager (Accounts / Sales)\nRanjan Fabrics Pvt. Ltd.\nBhilwara"} onClose={() => setReportOpen(false)} showToast={showToast} />}
+      {diffModal && (
+        <DiffModal init={diffModal} parties={groups.map((g) => g.name)} billsOf={(name) => (snap?.bills || []).filter((b) => b.outstanding > 0 && partyKey(b.party) === partyKey(name))}
+          onSave={saveDiff} onDelete={(id) => { if (window.confirm("Delete this entry?")) delDiff(id); }} onClose={() => setDiffModal(null)} />
+      )}
+      <SettingsModal open={showSettings} settings={settings} onSave={(s) => { updateSettings({ ...settings, ...s }); setShowSettings(false); }} onClose={() => setShowSettings(false)} />
+    </div>
+  );
+}
+
+function SyncBadge({ sync }) {
+  const m = {
+    syncing: ["Syncing…", "text-muted"],
+    ok: ["☁ Synced across devices", "text-loom"],
+    off: ["Saved on this device only", "text-muted"],
+    error: ["Sync failed — retry by reopening", "text-rust"],
+    setup: ["Cloud sync not set up — run supabase/outstanding.sql", "text-thread"],
+  }[sync];
+  return <span className={`font-semibold ${m[1]}`}>{m[0]}</span>;
+}
+
+function Header({ children }) {
+  return (
+    <div className="flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 className="font-display font-extrabold text-2xl">Outstanding</h1>
+        <p className="text-muted text-sm mt-1">Party-wise dues, ageing and WhatsApp statements</p>
+      </div>
+      <div className="flex items-center gap-2">{children}</div>
+    </div>
+  );
+}
+
+// Past-years outstanding, split FY-wise (Apr–Mar). The current FY (still running)
+// is shown separately below so "before 31 Mar <year>" totals don't include it.
+function FYOutstandingCard({ bills, asOn, onDrill }) {
+  const rows = useMemo(() => fyBreakup(bills, asOn), [bills, asOn]);
+  const curStart = fyStartYear(asOn);
+  const past = rows.filter((r) => !r.isCurrent);
+  const current = rows.find((r) => r.isCurrent);
+  const pastTotal = past.reduce((t, r) => t + r.amount, 0);
+  if (!rows.length) return null;
+  return (
+    <div className="bg-panel border border-line rounded-2xl p-4 sm:p-5 shadow-sm flex flex-col gap-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <span className="text-xs font-medium text-muted uppercase tracking-wide">
+            Outstanding before {fmtDate(fyEndDate(curStart))}
+          </span>
+          <button onClick={() => onDrill({ title: `Before ${fmtDate(fyEndDate(curStart))} — bills`, bills: bills.filter((b) => b.outstanding > 0 && fyStartYear(b.date) < curStart) })}
+            className="block text-left text-2xl sm:text-3xl font-display font-bold text-rust mt-0.5 underline decoration-dotted underline-offset-4 decoration-rust/40">{inr(pastTotal)}</button>
+          <span className="text-xs text-muted">dues from completed financial years</span>
+        </div>
+        {current && (
+          <div className="text-right flex flex-col items-end">
+            <span className="text-xs font-medium text-muted uppercase tracking-wide">FY {current.label} (current)</span>
+            <button onClick={() => onDrill({ title: `FY ${current.label} — bills`, bills: bills.filter((b) => b.outstanding > 0 && fyStartYear(b.date) === curStart) })}
+              className="text-lg font-display font-bold text-ink mt-0.5 underline decoration-dotted underline-offset-4 decoration-muted/60">{inr(current.amount)}</button>
+            <span className="text-xs text-muted">not counted above</span>
+          </div>
+        )}
+      </div>
+      {past.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          {past.map((r) => (
+            <button key={r.startYear} onClick={() => onDrill({ title: `FY ${r.label} — bills`, bills: bills.filter((b) => b.outstanding > 0 && fyStartYear(b.date) === r.startYear) })}
+              className="text-left rounded-xl border border-line bg-paper px-3 py-2 hover:bg-white active:scale-[0.98] transition">
+              <div className="text-[11px] font-semibold text-muted uppercase tracking-wide">FY {r.label}</div>
+              <div className="text-sm font-bold text-ink mt-0.5">{compactINR(r.amount)}</div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- Tab 1: statements ----------------
+function StatementsTab({ billSel, selSet, onBill, onBills, onCombined, onQuick, onStatement, onMark, onEditDiff, diffsOf, onOpen, rows, sent, settings, snap, startQueue, onLink, onConfirm, showToast }) {
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [sel, setSel] = useState(new Set());
+  const [onlyOverdue, setOnlyOverdue] = useState(false);
+  const [showAgeing, setShowAgeing] = useState(false);
+  const [sort, setSort] = useState("amount");
+  const [useLinks, setUseLinks] = useState(true);
+
+  const nSel = (r) => (billSel[r.g.key] ? billSel[r.g.key].length : r.g.bills.length);
+  const eligible = (r) => r.match.status === "auto" && r.phone && r.g.total > 0 && nSel(r) > 0;
+  const list0 = rows.filter((r) => {
+    if (q && !r.g.name.toLowerCase().includes(q.toLowerCase())) return false;
+    if (filter === "pending") return r.g.total > 0 && !sent[r.g.key];
+    if (filter === "link") return r.match.status !== "auto" || !r.phone;
+    if (filter === "overdue") return (r.overdueNet ?? r.overdue) > 0;
+    if (filter === "advance") return r.g.total < 0;
+    return true;
+  });
+  const list = [...list0].sort((a, b) =>
+    sort === "name" ? a.g.name.localeCompare(b.g.name) : sort === "oldest" ? b.g.oldest - a.g.oldest : sort === "overdue" ? b.overdue - a.overdue : b.g.total - a.g.total);
+  const toggle = (key) => setSel((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  const selectable = list.filter(eligible);
+  const chosen = rows.filter((r) => sel.has(r.g.key) && eligible(r));
+  const opts = { onlyOverdue, showAgeing };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap gap-2 items-center">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search party…" className="border border-line rounded-lg pl-9 pr-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
+        </div>
+        <select value={sort} onChange={(e) => setSort(e.target.value)} className="border border-line rounded-lg px-2 py-2 text-xs font-semibold bg-white outline-none">
+          <option value="amount">Sort: Amount</option><option value="overdue">Sort: Overdue</option><option value="oldest">Sort: Oldest bill</option><option value="name">Sort: Name</option>
+        </select>
+        {[["all", "All"], ["pending", "Not sent"], ["overdue", `Overdue`], ["link", "Needs link/phone"], ["advance", "Advance"]].map(([id, label]) => (
+          <button key={id} onClick={() => setFilter(id)} className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${filter === id ? "bg-ink text-white border-ink" : "border-line hover:bg-paper"}`}>{label}</button>
+        ))}
+      </div>
+
+      <div className="bg-ink2/5 border border-ink2/20 rounded-xl px-4 py-2.5 flex items-center gap-x-4 gap-y-2 flex-wrap text-sm">
+        <button onClick={() => setSel(new Set(selectable.map((r) => r.g.key)))} className="text-ink2 font-semibold hover:underline">Select all ({selectable.length})</button>
+        {sel.size > 0 && <button onClick={() => setSel(new Set())} className="text-muted font-semibold hover:underline">Clear</button>}
+        <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={onlyOverdue} onChange={(e) => setOnlyOverdue(e.target.checked)} /> Only bills &gt; {settings.creditDays}d</label>
+        <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={showAgeing} onChange={(e) => setShowAgeing(e.target.checked)} /> Add ageing summary</label>
+        <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={useLinks} onChange={(e) => setUseLinks(e.target.checked)} /> PDF + image</label>
+        <button disabled={!chosen.length} onClick={() => startQueue(chosen, { ...opts, links: useLinks })}
+          className="ml-auto bg-loom text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 disabled:opacity-40">
+          <Send size={14} /> Send via WhatsApp ({chosen.length})
+        </button>
+        <button disabled={!chosen.length} onClick={() => onCombined(chosen)} className="px-3 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper disabled:opacity-40 flex items-center gap-1.5"><FileText size={14} /> One PDF</button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
+        <span className="font-semibold">Bill ageing:</span>
+        {BUCKETS.map((b) => <span key={b.key} className="flex items-center gap-1"><i className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: b.color }} />{b.label}d</span>)}
+        <span className="ml-auto">Bar length = bill amount</span>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        {list.map((r) => {
+          const ok = eligible(r);
+          return (
+            <div key={r.g.key} className="bg-panel border border-line rounded-xl p-3 sm:p-4 grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 gap-y-2.5 items-start">
+              <input type="checkbox" disabled={!ok} checked={sel.has(r.g.key)} onChange={() => toggle(r.g.key)} className="w-4 h-4 mt-1" />
+              <div className="min-w-0">
+                <div className="font-semibold text-sm flex items-center gap-2 flex-wrap">
+                  <button onClick={() => onOpen(r.g.key)} className="text-left hover:underline">{r.g.name}</button>
+                  {sent[r.g.key] && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Sent</span>}
+                  {r.g.total < 0 && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Advance</span>}
+                  {billSel[r.g.key] && <span className="text-[10px] font-semibold text-thread bg-thread/10 px-1.5 py-0.5 rounded">Selected bills</span>}
+                  {r.g.advAdj > 0 && <span className="text-[10px] font-semibold text-loom bg-loom/10 px-1.5 py-0.5 rounded">Advance {inr(r.g.advAdj)} adjusted</span>}
+                </div>
+                <div className="text-xs text-muted mt-0.5">
+                  {r.match.status === "auto" && <>{r.match.customer.name !== r.g.name ? `${r.match.customer.name} · ` : ""}{r.phone || <span className="text-thread font-semibold">No phone</span>}</>}
+                  {r.match.status === "suggested" && (
+                    <span className="text-thread font-semibold">Match? {r.match.customer.name}{" "}
+                      <button onClick={() => onConfirm(r)} className="underline">Confirm</button>
+                    </span>
+                  )}
+                  {r.match.status === "none" && <span className="text-rust font-semibold">Not in master</span>}
+                  {" · "}{r.g.bills.length} bill{r.g.bills.length > 1 ? "s" : ""}
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className={`font-display font-bold text-base whitespace-nowrap ${r.g.total < 0 ? "text-loom" : ""}`}>{inr(r.g.total)}</div>
+                {r.g.due > 0 && <div className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-muted">oldest <DaysBadge days={r.g.oldest} /></div>}
+                {billSel[r.g.key] && <div className="text-[11px] font-semibold text-thread mt-0.5 whitespace-nowrap">Send: {inr(r.g.bills.filter((b) => selSet(r.g).has(billKey(b))).reduce((t, b) => t + b.outstanding, 0))}</div>}
+              </div>
+              <div className="col-span-3 flex items-center justify-end gap-1.5">
+                {(r.match.status !== "auto" || !r.phone) && (
+                  <button onClick={() => onLink(r.g)} className="p-2 rounded-lg border border-line hover:bg-paper text-ink2" aria-label="Link customer / phone"><Link2 size={15} /></button>
+                )}
+                <button disabled={r.g.bills.length === 0} onClick={() => onStatement(r.g.key)} className="p-2 rounded-lg border border-line hover:bg-paper disabled:opacity-30" aria-label="Statement PDF / Image"><FileText size={15} /></button>
+                <button disabled={!ok} onClick={() => startQueue([r], opts)} title="Send the statement as a text message" className="p-2 rounded-lg border border-line hover:bg-paper disabled:opacity-30" aria-label="WhatsApp text message"><MessageCircle size={15} /></button>
+                <button disabled={!ok} onClick={() => onQuick(r)} title="Create PDF + image and send on WhatsApp" className="px-3 py-2 rounded-lg bg-loom text-white disabled:opacity-30 flex items-center gap-1.5 text-xs font-semibold" aria-label="Send PDF and image on WhatsApp"><Send size={14} /> PDF + Image</button>
+              </div>
+              <BillBars g={r.g} sel={selSet(r.g)} onToggle={(b) => onBill(r, b)} onMode={(m) => onBills(r, m)} onMark={(b) => onMark(r, b)} diffs={diffsOf(r)} onEditDiff={onEditDiff} />
+            </div>
+          );
+        })}
+        {!list.length && <div className="text-center text-sm text-muted py-10">Nothing to show for this filter.</div>}
+      </div>
+    </div>
+  );
+}
+
+function BillBars({ g, sel, onToggle, onMode, onMark, diffs = [], onEditDiff, limit = 3 }) {
+  const [all, setAll] = useState(false);
+  const bills = [...g.bills].sort((a, b) => a.date.localeCompare(b.date));
+  if (!bills.length) return null;
+  const max = Math.max(1, ...bills.map((b) => Math.abs(b.outstanding)));
+  const shown = all ? bills : bills.slice(0, limit);
+  const picking = !!onToggle;
+  const nSel = picking ? bills.filter((b) => sel.has(billKey(b))).length : bills.length;
+  const selAmt = bills.filter((b) => !picking || sel.has(billKey(b))).reduce((t, b) => t + b.outstanding, 0);
+  return (
+    <div className="col-span-3 basis-full w-full flex flex-col gap-2 pt-2 border-t border-line/70">
+      {picking && (
+        <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px]">
+          <span className="font-semibold">Bills to send: {nSel}/{bills.length} · {inr(selAmt)}</span>
+          <button onClick={() => onMode("all")} className="text-ink2 font-semibold hover:underline">All</button>
+          <button onClick={() => onMode("overdue")} className="text-ink2 font-semibold hover:underline">Overdue</button>
+          <button onClick={() => onMode("none")} className="text-muted font-semibold hover:underline">None</button>
+        </div>
+      )}
+      {shown.map((b, i) => {
+        const neg = b.outstanding < 0;
+        const color = neg ? "#2F6E5D" : bucketOf(b.days).color;
+        const part = !neg && b.credit > 0 && b.amount > 0;
+        const on = !picking || sel.has(billKey(b));
+        return (
+          <div key={i} className={`flex items-center gap-2 text-[11px] ${on ? "" : "opacity-45"}`}>
+            {picking && <input type="checkbox" className="w-4 h-4 shrink-0" checked={on} onChange={() => onToggle(b)} aria-label={`Include bill ${b.billNo}`} />}
+            <div className="w-[78px] shrink-0 leading-tight">
+              <div className="font-semibold truncate">{neg ? (b.billNo && !/advance/i.test(b.billNo) ? b.billNo : "Advance") : b.billNo}</div>
+              <div className="text-muted">{fmtDate(b.date).replace(/-(\d{2})(\d{2})$/, "-$2")}</div>
+            </div>
+            <div className="w-14 sm:w-24 h-2.5 rounded-full bg-paper overflow-hidden shrink-0">
+              <div className="h-full rounded-full" style={{ width: `${Math.max(8, (Math.abs(b.outstanding) / max) * 100)}%`, background: color }} />
+            </div>
+            <div className="flex-1 text-right leading-tight min-w-0">
+              <div className={`font-bold text-xs ${neg ? "text-loom" : ""}`}>{neg ? "-" : ""}{inr(Math.abs(b.outstanding))}</div>
+              {part && <div className="text-[10px] text-muted truncate">of {inr(b.amount)}</div>}
+            </div>
+            <div className="w-[42px] text-center shrink-0">{neg ? <span className="text-loom font-semibold">Adv</span> : <DaysBadge days={b.days} />}</div>
+            {onMark && !neg && <button onClick={() => onMark(b)} title="Mark as claim / difference with mill" className="text-[10px] font-semibold text-thread hover:underline shrink-0">Diff</button>}
+          </div>
+        );
+      })}
+      {diffs.length > 0 && (
+        <div className="flex flex-col gap-1 pt-1.5 border-t border-dashed border-line/70">
+          {diffs.map((d) => (
+            <button key={d.id} onClick={() => onEditDiff?.(d)} className={`flex items-center justify-between gap-2 text-left text-[11px] ${d.status === "closed" ? "opacity-50" : ""}`}>
+              <span className="truncate"><b className="text-thread">{d.type}</b> · {d.billNo || "—"}{d.status === "closed" ? " · closed" : " · in discussion"}</span>
+              <span className="font-semibold shrink-0">{inr(d.amount)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {bills.length > limit && (
+        <button onClick={() => setAll(!all)} className="text-[11px] font-semibold text-ink2 text-left hover:underline">
+          {all ? "Show fewer" : `Show all ${bills.length} bills`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function StatementModal({ company, source, row, snap, settings, onClose, showToast }) {
+  const { g } = row;
+  const ranjan = source === "ranjan";
+  const [fmt, setFmt] = useState(ranjan ? "ledger" : "card");
+  const [files, setFiles] = useState(null);
+  useEffect(() => {
+    let urls = [];
+    let dead = false;
+    (async () => {
+      try {
+        const card = renderStatementCanvas(g, snap.asOn, { creditDays: settings.creditDays, footer: settings.footer, company, payment: settings.paymentDetails });
+        const logo = ranjan ? RANJAN_LOGO : null;
+        const pages = buildLedgerPages(g, snap, { format: ranjan ? "ranjan" : "generic", company, logo: !!logo });
+        const [cardPng, cardPdf, ledPdf, ledCanvas] = await Promise.all([
+          canvasToBlob(card), canvasToPdfBlob(card), ledgerPdfBlob(pages, logo), ledgerPageCanvas(pages[0], logo, 2.2, pages.length === 1),
+        ]);
+        const ledPng = await canvasToBlob(ledCanvas);
+        const set = { card: { png: cardPng, pdf: cardPdf }, ledger: { png: ledPng, pdf: ledPdf } };
+        Object.values(set).forEach((x) => { x.url = URL.createObjectURL(x.png); urls.push(x.url); });
+        if (!dead) setFiles(set);
+      } catch (e) {
+        showToast("Couldn't build the statement.", "error");
+      }
+    })();
+    return () => { dead = true; urls.forEach((u) => URL.revokeObjectURL(u)); };
+  }, [g, snap, settings.creditDays, settings.footer, settings.paymentDetails, company, ranjan]);
+
+  const cur = files?.[fmt];
+  const caption = statementCaption(g, snap.asOn, company, row.partial);
+  const base = (kind) => statementFileName(g, kind).replace("Statement_", fmt === "ledger" ? "Outstanding_" : "Statement_");
+  const [busy, setBusy] = useState(false);
+  // Share-sheet route: the file itself is attached, but WhatsApp asks you to pick the chat.
+  const send = async (kind) => {
+    const res = await shareStatementFile(cur[kind], base(kind), row.phone, caption);
+    if (res === "downloaded") showToast(row.phone ? "Saved — attach it in the WhatsApp chat that opened" : "Saved to your device", "info");
+  };
+  // Link route: file is stored online and the customer's own chat opens with the link in the message.
+  const sendLink = async (kind) => {
+    if (!row.phone) { showToast("No phone number linked for this customer.", "error"); return; }
+    setBusy(true);
+    try {
+      const url = await uploadStatement(cur[kind], base(kind));
+      const text = `${caption}\n\n${kind === "pdf" ? "Statement (PDF)" : "Statement (Image)"}: ${url}`;
+      const link = buildWhatsAppLink(row.phone, text);
+      if (!window.open(link, "_blank")) window.location.href = link;
+    } catch (e) {
+      showToast("Couldn't create the link — run supabase/outstanding.sql once, then retry.", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const btn = "px-3 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40";
+  const tab = (id, label) => (
+    <button key={id} onClick={() => setFmt(id)} className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition ${fmt === id ? "bg-ink text-white" : "text-muted hover:text-ink"}`}>{label}</button>
+  );
+
+  return (
+    <Modal open onClose={onClose} title={`Statement — ${g.name}`} wide>
+      <div className="flex flex-col gap-3">
+        <div className="flex gap-1 p-1 bg-paper border border-line rounded-xl">
+          {tab("ledger", ranjan ? "Ranjan ledger format" : "Ledger format")}
+          {tab("card", "Summary card")}
+        </div>
+        <div className="border border-line rounded-xl bg-paper overflow-auto max-h-[56vh]">
+          {cur ? <img src={cur.url} alt="Statement preview" className="w-full block" /> : <div className="py-16 text-center text-sm text-muted">Preparing statement…</div>}
+        </div>
+        {!row.phone && <p className="text-xs text-thread font-semibold">No phone linked — you can still share via the share sheet or download.</p>}
+        <div className="grid grid-cols-2 gap-2">
+          <button disabled={!cur || busy || !row.phone} onClick={() => sendLink("pdf")} className={`${btn} bg-loom text-white`}><MessageCircle size={15} /> {busy ? "Preparing…" : "Send PDF"}</button>
+          <button disabled={!cur || busy || !row.phone} onClick={() => sendLink("png")} className={`${btn} bg-loom text-white`}><MessageCircle size={15} /> {busy ? "Preparing…" : "Send Image"}</button>
+          <button disabled={!cur} onClick={() => saveBlob(base("pdf"), cur.pdf)} className={`${btn} border border-line hover:bg-paper`}><Download size={15} /> Save PDF</button>
+          <button disabled={!cur} onClick={() => saveBlob(base("png"), cur.png)} className={`${btn} border border-line hover:bg-paper`}><Download size={15} /> Save Image</button>
+        </div>
+        <p className="text-[11px] text-muted leading-snug">
+          “Send” opens the customer's own WhatsApp chat{row.phone ? ` (${row.phone})` : ""} with a link to the {fmt === "ledger" ? "ledger" : "statement"} in the message.
+          Prefer to attach the file itself?{" "}
+          <button onClick={() => send("pdf")} className="font-semibold text-ink2 underline">Share PDF</button> ·{" "}
+          <button onClick={() => send("png")} className="font-semibold text-ink2 underline">Share Image</button>
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+function AgeBar({ g, className = "" }) {
+  if (!g.due) return null;
+  return (
+    <div className={`flex h-1.5 rounded-full overflow-hidden bg-paper ${className}`}>
+      {BUCKETS.map((b) => g.buckets[b.key] > 0 && (
+        <div key={b.key} title={`${b.label}d: ${inr(g.buckets[b.key])}`} style={{ width: `${(g.buckets[b.key] / g.due) * 100}%`, background: b.color }} />
+      ))}
+    </div>
+  );
+}
+
+function PartyDetail({ row, settings, snap, onClose, onSend, onStatement }) {
+  const { g } = row;
+  const canSend = row.match.status === "auto" && row.phone && g.total > 0;
+  const bills = [...g.bills].sort((a, b) => a.date.localeCompare(b.date));
+  return (
+    <Modal open onClose={onClose} title={g.name} wide>
+      <div className="flex flex-col gap-4">
+        <div className="flex items-end justify-between gap-3 flex-wrap">
+          <div>
+            <div className="text-xs text-muted">Net outstanding · as on {fmtDate(snap.asOn)}</div>
+            <div className={`font-display font-extrabold text-2xl ${g.total < 0 ? "text-loom" : ""}`}>{inr(g.total)}</div>
+            {g.advance > 0 && <div className="text-xs text-loom">incl. advance {inr(g.advance)}</div>}
+          </div>
+          <div className="text-xs text-muted text-right">{row.phone || "No phone"}{row.overdue > 0 && <div className="text-rust font-semibold">{inr(row.overdue)} overdue &gt; {settings.creditDays}d</div>}</div>
+        </div>
+        <AgeBar g={g} />
+        <div className="flex flex-wrap gap-1.5">
+          {BUCKETS.filter((b) => g.buckets[b.key] > 0).map((b) => (
+            <span key={b.key} className="text-[11px] font-semibold px-2 py-1 rounded-full" style={{ background: `${b.color}1F`, color: b.color }}>{b.label}d · {compactINR(g.buckets[b.key])}</span>
+          ))}
+        </div>
+        <div className="border border-line rounded-xl overflow-x-auto max-h-64 overflow-y-auto">
+          <table className="w-full text-sm min-w-[360px]">
+            <thead><tr className="text-xs text-muted uppercase tracking-wide border-b border-line"><th className="text-left px-3 py-2">Bill</th><th className="text-left px-3">Date</th><th className="text-right px-3">Outstanding</th><th className="text-right px-3">Days</th></tr></thead>
+            <tbody>
+              {bills.map((b, i) => (
+                <tr key={i} className="border-b border-line last:border-0">
+                  <td className="px-3 py-2 font-medium">{b.billNo}</td>
+                  <td className="px-3 whitespace-nowrap">{fmtDate(b.date)}</td>
+                  <td className={`px-3 text-right font-semibold ${b.outstanding < 0 ? "text-loom" : ""}`}>{formatCurrency(b.outstanding)}</td>
+                  <td className="px-3 text-right">{b.outstanding > 0 ? <DaysBadge days={b.days} /> : "–"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex gap-2 justify-end flex-wrap">
+          {row.phone && <a href={`tel:${row.phone}`} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper flex items-center gap-2"><Phone size={14} /> Call</a>}
+          <button onClick={() => onStatement(row)} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper flex items-center gap-2"><FileText size={14} /> Statement (PDF / Image)</button>
+          {row.overdue > 0 && <button disabled={!canSend} onClick={() => onSend(row, { onlyOverdue: true })} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper disabled:opacity-40">Overdue only</button>}
+          <button disabled={!canSend} onClick={() => onSend(row, {})} className="bg-loom text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 disabled:opacity-40"><MessageCircle size={14} /> WhatsApp statement</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ExportBar({ onExcel, onPdf }) {
+  const showToast = useToast();
+  const run = (fn) => async () => {
+    try { await fn(); } catch (e) { showToast("Export failed — please try again.", "error"); }
+  };
+  return (
+    <div className="flex gap-2 justify-end">
+      <button onClick={run(onExcel)} className="px-3 py-1.5 rounded-lg border border-line text-xs font-semibold hover:bg-paper flex items-center gap-1.5"><Download size={13} /> Excel</button>
+      <button onClick={run(onPdf)} className="px-3 py-1.5 rounded-lg border border-line text-xs font-semibold hover:bg-paper flex items-center gap-1.5"><Download size={13} /> PDF</button>
+    </div>
+  );
+}
+
+// ---------------- modals ----------------
+// wa.me can only open one chat per tap (browsers block bulk popups), so
+// multi-party sends run as a queue: preview → Open WhatsApp → next.
+function SendModal({ queue, onSent, onClose }) {
+  const [idx, setIdx] = useState(0);
+  const item = queue[idx];
+  const [msg, setMsg] = useState(item.message);
+  useEffect(() => { setMsg(queue[idx].message); }, [idx, queue]);
+
+  const next = () => (idx + 1 < queue.length ? setIdx(idx + 1) : onClose());
+  const open = () => {
+    window.open(buildWhatsAppLink(item.phone, msg), "_blank");
+    onSent(item.key);
+    next();
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Send ${idx + 1} of ${queue.length}`} wide>
+      <div className="flex flex-col gap-3">
+        <div>
+          <div className="font-semibold">{item.name}</div>
+          <div className="text-xs text-muted">{item.phone}</div>
+        </div>
+        <textarea value={msg} onChange={(e) => setMsg(e.target.value)} rows={14}
+          className="border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2 font-mono leading-relaxed" />
+        <div className="flex gap-2 justify-end">
+          {queue.length > 1 && <button onClick={next} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper">Skip</button>}
+          <button onClick={open} className="bg-loom text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2"><MessageCircle size={15} /> Open WhatsApp{queue.length > 1 && idx + 1 < queue.length ? " & next" : ""}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+const DIFF_TONE = { "Garments Claim": "bg-rust/10 text-rust", "Rate Diff": "bg-thread/10 text-thread", "Other Difference": "bg-ink/10 text-ink2" };
+
+function ClaimReportModal({ items, bills, asOn, company, defaultTo, onClose, showToast }) {
+  const [to, setTo] = useState(defaultTo);
+  const [signatory, setSignatory] = useState("");
+  const [includeClosed, setIncludeClosed] = useState(false);
+  const [layout, setLayout] = useState("table"); // PDF: "table" = claim table only, "letter" = official claim letter
+  const [busy, setBusy] = useState(false);
+  const ref = `CLM/${asOn.replace(/-/g, "")}`;
+  const nOpen = items.filter((d) => d.status !== "closed").length;
+  const make = async (kind) => {
+    setBusy(true);
+    try {
+      if (kind === "xlsx") {
+        const { downloadClaimExcel } = await import("../utils/claimReportXlsx");
+        downloadClaimExcel({ items, bills, includeClosed }, `Claims_Differences_${asOn}.xlsx`);
+      } else {
+        const { buildClaimReportPdf } = await import("../utils/claimReportPdf");
+        const blob = await buildClaimReportPdf({ layout, company, to, ref, asOn, items, bills, signatory: signatory.trim(), includeClosed });
+        downloadBlob(`Claims_Differences_Statement_${asOn}.pdf`, blob);
+      }
+      onClose();
+    } catch (e) {
+      showToast("Couldn't build the report — please try again.", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const fld = "mt-1 border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2";
+  const lbl = "text-xs font-semibold text-muted uppercase tracking-wide";
+  return (
+    <Modal open onClose={onClose} title="Report for Mill — claims & differences (Excel / PDF)">
+      <div className="flex flex-col gap-4">
+        <div>
+          <label className={lbl}>PDF format</label>
+          <div className="flex gap-2 mt-1">
+            {[["table", "Claim table only"], ["letter", "Official claim letter"]].map(([k, t]) => (
+              <button key={k} onClick={() => setLayout(k)} className={`flex-1 px-3 py-2 rounded-lg text-sm font-semibold border ${layout === k ? "bg-ink text-white border-ink" : "border-line hover:bg-paper"}`}>{t}</button>
+            ))}
+          </div>
+        </div>
+        {layout === "letter" && (
+          <>
+            <div>
+              <label className={lbl}>Addressed to</label>
+              <textarea value={to} onChange={(e) => setTo(e.target.value)} rows={3} className={fld} />
+            </div>
+            <div>
+              <label className={lbl}>Authorised signatory name (optional)</label>
+              <input value={signatory} onChange={(e) => setSignatory(e.target.value)} className={fld} />
+            </div>
+          </>
+        )}
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeClosed} onChange={(e) => setIncludeClosed(e.target.checked)} /> Also list closed / settled items for reference</label>
+        <p className="text-xs text-muted">{nOpen} open item{nOpen === 1 ? "" : "s"}. PDF “Claim table only”: heading + one table with total. “Official claim letter”: ref, to, subject, table, summary, action requested, signature. Excel: “Claims Detail” (filter + total) and “Summary” sheets.</p>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper">Cancel</button>
+          <button onClick={() => make("xlsx")} disabled={busy || !nOpen} className="px-4 py-2 rounded-lg text-sm font-semibold border border-ink text-ink hover:bg-paper disabled:opacity-40">{busy ? "Preparing…" : "Download Excel"}</button>
+          <button onClick={() => make("pdf")} disabled={busy || !nOpen} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-40">{busy ? "Preparing…" : "Download PDF"}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function DiffModal({ init, parties, billsOf, onSave, onDelete, onClose }) {
+  const ex = init.item || null;
+  const [party, setParty] = useState(ex?.party || init.party || "");
+  const [type, setType] = useState(ex?.type || DIFF_TYPES[0]);
+  const [billNo, setBillNo] = useState(ex?.billNo ?? init.bill?.billNo ?? "");
+  const [amount, setAmount] = useState(ex ? String(ex.amount) : init.bill ? String(init.bill.outstanding) : "");
+  const [ref, setRef] = useState(ex?.ref || "");
+  const [note, setNote] = useState(ex?.note || "");
+  const bills = useMemo(() => (party ? billsOf(party) : []), [party]);
+  const norm = (x) => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const match = bills.find((b) => norm(b.billNo) && norm(b.billNo) === norm(billNo));
+  const amt = Number(amount) || 0;
+  const pickBill = (v) => { setBillNo(v); const m = bills.find((b) => norm(b.billNo) === norm(v)); if (m && !amount) setAmount(String(m.outstanding)); };
+  const save = () => {
+    if (!party || !(amt > 0)) return;
+    onSave({
+      id: ex?.id || `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      party, type, billNo: billNo.trim(), amount: amt,
+      oldAmt: ex?.oldAmt ?? (match ? match.outstanding : amt),
+      ref: ref.trim(), note: note.trim(),
+      date: ex?.date || todayIso(), status: ex?.status || "open", closedOn: ex?.closedOn || "",
+    });
+  };
+  const fld = "mt-1 border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2";
+  const lbl = "text-xs font-semibold text-muted uppercase tracking-wide";
+  return (
+    <Modal open onClose={onClose} title={ex ? "Edit claim / difference" : "Mark claim / difference"}>
+      <div className="flex flex-col gap-4">
+        <div className="flex gap-2 flex-wrap">
+          {DIFF_TYPES.map((t) => (
+            <button key={t} onClick={() => setType(t)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${type === t ? "bg-ink text-white border-ink" : "border-line hover:bg-paper"}`}>{t}</button>
+          ))}
+        </div>
+        <div>
+          <label className={lbl}>Party</label>
+          <select value={party} onChange={(e) => setParty(e.target.value)} className={fld}>
+            <option value="">Select party…</option>
+            {[...new Set([...(ex && !parties.includes(ex.party) ? [ex.party] : []), ...parties])].sort((a, b) => a.localeCompare(b)).map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className={lbl}>Bill no</label>
+          <input value={billNo} onChange={(e) => pickBill(e.target.value)} list="diff-bills" placeholder="Pick a bill or type any bill / debit note no" className={fld} />
+          <datalist id="diff-bills">{bills.map((b) => <option key={b.billNo + b.date} value={b.billNo}>{`${fmtDate(b.date)} · ${inr(b.outstanding)}`}</option>)}</datalist>
+          <p className="text-xs text-muted mt-1">
+            {!billNo.trim() ? "Optional — leave blank to just track an amount."
+              : match ? `Matches outstanding bill (${inr(match.outstanding)}) — the amount below is kept out of overdue reminders / Collection Priority.`
+              : "Not in the current outstanding report — will be tracked only (nothing excluded)."}
+          </p>
+        </div>
+        <div>
+          <label className={lbl}>Difference amount (₹)</label>
+          <input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" placeholder="Amount under claim / difference" className={fld} />
+          <div className="flex gap-3 flex-wrap text-xs mt-1">
+            {match && <button onClick={() => setAmount(String(match.outstanding))} className="text-ink2 font-semibold hover:underline">Use full bill outstanding {inr(match.outstanding)}</button>}
+            {match && amt > match.outstanding && <span className="text-thread font-semibold">More than the bill — only {inr(match.outstanding)} is deducted</span>}
+          </div>
+        </div>
+        <div>
+          <label className={lbl}>Claim / debit note ref (optional)</label>
+          <input value={ref} onChange={(e) => setRef(e.target.value)} className={fld} />
+        </div>
+        <div>
+          <label className={lbl}>Note / status of discussion</label>
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="e.g. rate diff 3/kg, waiting for mill reply" className={fld} />
+        </div>
+        <div className="flex gap-2 justify-end">
+          {ex && <button onClick={() => onDelete(ex.id)} className="px-4 py-2 rounded-lg text-sm font-semibold text-rust hover:bg-rust/10 mr-auto">Delete</button>}
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper">Cancel</button>
+          <button onClick={save} disabled={!party || !(amt > 0)} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-40">Save</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function DifferencesTab({ items, totals, bills = [], asOn, onAdd, onReport, onEdit, onToggle, onDelete }) {
+  const [type, setType] = useState("all");
+  const [showClosed, setShowClosed] = useState(false);
+  const [q, setQ] = useState("");
+  const list = items
+    .filter((d) => (showClosed || d.status !== "closed") && (type === "all" || d.type === type) && (!q || `${d.party} ${d.billNo} ${d.ref} ${d.note}`.toLowerCase().includes(q.toLowerCase())))
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const exportRows = async () => {
+    const { downloadClaimExcel } = await import("../utils/claimReportXlsx");
+    downloadClaimExcel({ items: list, bills, includeClosed: true }, `Claims_Differences_${asOn}.xlsx`);
+  };
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {DIFF_TYPES.map((t) => (
+          <div key={t} className="bg-white border border-line rounded-xl px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">{t}</div>
+            <div className="text-base font-bold">{inr(totals.byType[t] || 0)}</div>
+          </div>
+        ))}
+        <div className="bg-white border border-line rounded-xl px-3 py-2">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted">Kept out of overdue</div>
+          <div className="text-base font-bold text-thread">{inr(totals.applied)}</div>
+          {totals.tracked > 0 && <div className="text-[10px] text-muted">+ {inr(totals.tracked)} tracked only</div>}
+        </div>
+      </div>
+      <div className="flex gap-2 flex-wrap items-center">
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search party / bill / note…" className="border border-line rounded-lg px-3 py-2 text-sm bg-white outline-none focus:border-ink2 min-w-[180px] flex-1" />
+        <select value={type} onChange={(e) => setType(e.target.value)} className="border border-line rounded-lg px-3 py-2 text-sm bg-white">
+          <option value="all">All types</option>{DIFF_TYPES.map((t) => <option key={t}>{t}</option>)}
+        </select>
+        <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} /> Show closed</label>
+        <button onClick={exportRows} disabled={!list.length} className="px-3 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper disabled:opacity-40 flex items-center gap-1.5"><Download size={14} /> Excel</button>
+        <button onClick={onReport} disabled={!items.length} className="px-3 py-2 rounded-lg text-sm font-semibold border border-ink text-ink hover:bg-paper disabled:opacity-40 flex items-center gap-1.5"><FileText size={14} /> Report for Mill (PDF)</button>
+        <button onClick={onAdd} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold">+ Add</button>
+      </div>
+      <p className="text-xs text-muted">Open items are kept out of Collection Priority and overdue reminders; other reports (ageing, bill-wise, month-wise) stay as per the uploaded outstanding. Close an item once settled — it is chased again if the bill is still pending.</p>
+      {!list.length && <div className="bg-white border border-line rounded-xl p-6 text-center text-sm text-muted">No claims / differences marked yet. Use the “Diff” link beside any bill in Statements, or “+ Add”.</div>}
+      {list.map((d) => {
+        const closed = d.status === "closed";
+        return (
+          <div key={d.id} className={`bg-white border border-line rounded-xl px-3 py-2.5 flex flex-col gap-1 ${closed ? "opacity-60" : ""}`}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-semibold text-sm truncate">{d.party}</div>
+                <div className="flex gap-2 items-center flex-wrap text-[11px] mt-0.5">
+                  <span className={`px-1.5 py-0.5 rounded font-semibold ${DIFF_TONE[d.type] || DIFF_TONE["Other Difference"]}`}>{d.type}</span>
+                  <span className="text-muted">Bill {d.billNo || "—"}{d.ref ? ` · Ref ${d.ref}` : ""} · {fmtDate(d.date)}</span>
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="font-bold">{inr(d.amount)}</div>
+                {d.oldAmt > 0 && Math.abs(d.oldAmt - d.amount) > 0.5 && <div className="text-[10px] text-muted">old outstanding {inr(d.oldAmt)}</div>}
+              </div>
+            </div>
+            {d.note && <div className="text-xs text-ink2">{d.note}</div>}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-[11px] text-muted">
+                {closed ? `Closed${d.closedOn ? ` on ${fmtDate(d.closedOn)}` : ""}`
+                  : d.linked ? (d.applied < d.amount ? `Excluded ${inr(d.applied)} from overdue (bill outstanding is now lower)` : `Excluded ${inr(d.applied)} from overdue`)
+                  : "Bill not in current report — tracked only"}
+              </span>
+              <span className="flex gap-3 text-[11px] font-semibold">
+                <button onClick={() => onEdit(d)} className="text-ink2 hover:underline">Edit</button>
+                <button onClick={() => onToggle(d.id)} className="text-ink2 hover:underline">{closed ? "Reopen" : "Close"}</button>
+                <button onClick={() => onDelete(d)} className="text-rust hover:underline">Delete</button>
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+function LinkModal({ group, customers, link, onSave, onClose }) {
+  const [q, setQ] = useState("");
+  const [customer, setCustomer] = useState(() => customers.find((c) => c.id === link?.customerId) || null);
+  const [phone, setPhone] = useState(link?.phone || "");
+  const suggestions = customers
+    .filter((c) => (c.name || "").toLowerCase().includes(q.toLowerCase()))
+    .map((c) => ({ id: c.id, label: c.name, sublabel: [c.city, c.phone].filter(Boolean).join(" · "), c }));
+
+  const save = () => {
+    const effective = phone || customer?.phone || "";
+    if (!customer && !phone) return onSave(null);
+    onSave({
+      ...(customer ? { customerId: customer.id } : {}),
+      ...(phone && phone !== customer?.phone ? { phone } : {}),
+      ...(effective ? {} : {}),
+    });
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Link — ${group.name}`}>
+      <div className="flex flex-col gap-4">
+        <div>
+          <label className="text-xs font-semibold text-muted uppercase tracking-wide">Customer in master</label>
+          <div className="mt-1">
+            <SearchDropdown query={q} onQueryChange={setQ} suggestions={suggestions} placeholder="Search customer…"
+              onSelect={(s) => { setCustomer(s.c); setQ(""); if (!phone) setPhone(s.c.phone || ""); }} />
+          </div>
+          {customer && <div className="text-sm mt-2 font-medium text-loom">✓ {customer.name}</div>}
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-muted uppercase tracking-wide">WhatsApp number</label>
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit number" inputMode="tel"
+            className="mt-1 border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
+          <p className="text-xs text-muted mt-1">Saved for this party only — your master record isn't changed.</p>
+        </div>
+        <div className="flex gap-2 justify-end">
+          {link && <button onClick={() => onSave(null)} className="px-4 py-2 rounded-lg text-sm font-semibold text-rust hover:bg-rust/10 mr-auto">Remove link</button>}
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper">Cancel</button>
+          <button onClick={save} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function SettingsModal({ open, settings, onSave, onClose }) {
+  const [creditDays, setCreditDays] = useState(settings.creditDays);
+  const [footer, setFooter] = useState(settings.footer);
+  const [pay, setPay] = useState(settings.paymentDetails || "");
+  const [fifo, setFifo] = useState(settings.fifoAdvance !== false);
+  useEffect(() => { if (open) { setCreditDays(settings.creditDays); setFooter(settings.footer); setPay(settings.paymentDetails || ""); setFifo(settings.fifoAdvance !== false); } }, [open, settings]);
+  return (
+    <Modal open={open} onClose={onClose} title="Outstanding settings">
+      <div className="flex flex-col gap-4">
+        <div>
+          <label className="text-xs font-semibold text-muted uppercase tracking-wide">Credit days (overdue after)</label>
+          <input type="number" min={0} value={creditDays} onChange={(e) => setCreditDays(e.target.value)}
+            className="mt-1 border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
+        </div>
+        <div>
+          <label className="text-xs font-semibold text-muted uppercase tracking-wide">Message footer</label>
+          <textarea value={footer} onChange={(e) => setFooter(e.target.value)} rows={3} placeholder="e.g. bank details / payment request"
+            className="mt-1 border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
+          <button onClick={() => setFooter(DEFAULT_FOOTER)} className="text-xs text-ink2 font-semibold mt-1 hover:underline">Reset to default</button>
+        </div>
+        <label className="flex items-start gap-2.5 text-sm cursor-pointer">
+          <input type="checkbox" className="w-4 h-4 mt-0.5" checked={fifo} onChange={(e) => setFifo(e.target.checked)} />
+          <span><b>Adjust advance / receipts on FIFO basis</b><br /><span className="text-xs text-muted">Each customer's advance is set off against their oldest bills first, in every view, statement and report.</span></span>
+        </label>
+        <div>
+          <label className="text-xs font-semibold text-muted uppercase tracking-wide">Payment details (shown on statements)</label>
+          <textarea value={pay} onChange={(e) => setPay(e.target.value)} rows={3} placeholder={"Bank, A/c no., IFSC\nUPI id"}
+            className="mt-1 border border-line rounded-lg px-3 py-2 text-sm bg-white w-full outline-none focus:border-ink2" />
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold border border-line hover:bg-paper">Cancel</button>
+          <button onClick={() => onSave({ creditDays: Math.max(0, Number(creditDays) || 0), footer, paymentDetails: pay, fifoAdvance: fifo })} className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-semibold">Save</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
