@@ -66,9 +66,9 @@ export default function CollectionsTab({ groups, coll, updateColl, company, show
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-3 gap-3">
-        <KpiCard label="This week" value={inr(weekTotal)} icon={Wallet} sub={weekLabel(week)} />
-        <KpiCard label="Advice pending" value={inr(pendingTotal)} tone="thread" icon={Clock} sub={`${pending.length} payment${pending.length === 1 ? "" : "s"}`} />
-        <KpiCard label="Last advice" value={lastAdv ? `No. ${lastAdv.no}` : "–"} tone="loom" icon={CheckCircle2} sub={lastAdv ? `${dmyFull(lastAdv.date)} · ${inr(lastAdv.total)}` : "none yet"} />
+        <KpiCard compact label="This week" value={inr(weekTotal)} icon={Wallet} sub={weekLabel(week)} />
+        <KpiCard compact label="Advice pending" value={inr(pendingTotal)} tone="thread" icon={Clock} sub={`${pending.length} payment${pending.length === 1 ? "" : "s"}`} />
+        <KpiCard compact label="Last advice" value={lastAdv ? `No. ${lastAdv.no}` : "–"} tone="loom" icon={CheckCircle2} sub={lastAdv ? `${dmyFull(lastAdv.date)} · ${inr(lastAdv.total)}` : "none yet"} />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">

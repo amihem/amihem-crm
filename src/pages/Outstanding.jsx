@@ -10,6 +10,7 @@ import { isSupabaseConfigured } from "../services/supabaseClient";
 import { pullState, pushState, isSetupError, uploadStatement } from "../services/outstandingSync";
 import Modal from "../components/Modal.jsx";
 import { SummaryTab, BillsTab, MonthTab, PriorityTab, MovementTab } from "./outstandingReports.jsx";
+import InsightsTab from "./outstandingInsights.jsx";
 import DrillModal from "./outstandingDrill.jsx";
 import CollectionsTab from "./outstandingCollections.jsx";
 import TrackerTab from "./outstandingTracker.jsx";
@@ -41,6 +42,7 @@ const TABS = [
   { id: "month", label: "Month-wise" },
   { id: "priority", label: "Collection Priority" },
   { id: "movement", label: "Movement" },
+  { id: "insights", label: "Insights" },
   { id: "tracker", label: "Payment Tracker" },
   { id: "differences", label: "Differences / Claims" },
   { id: "collections", label: "Collections & Advice" },
@@ -501,6 +503,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
         <CollectionsTab groups={groupParties(snapRaw.bills)} coll={coll} updateColl={updateColl} company={company} showToast={showToast} />
       )}
       {tab === "differences" && <DifferencesTab items={snapD.diffs || []} totals={diffTotals} bills={snap.bills} asOn={snap.asOn} onAdd={() => setDiffModal({})} onReport={() => setReportOpen(true)} onEdit={(d) => setDiffModal({ item: d })} onToggle={toggleDiff} onDelete={(d) => { if (window.confirm(`Delete this ${d.type} entry for ${d.party}?`)) delDiff(d.id); }} />}
+      {tab === "insights" && <InsightsTab snap={snapF} history={snapRaw.history || []} settings={settings} coll={coll} claims={(snapD.diffs || []).filter((d) => d.status !== "closed")} source={source} />}
       {tab === "movement" && <MovementTab snap={snapRaw} company={company} filterNote={fNote} onOpen={setDetailKey} />}
       {tab === "tracker" && (
         <TrackerTab rows={rowsF} rawGroups={rawGroups} coll={coll} updateColl={updateColl} settings={settings} company={company} snap={snap} showToast={showToast} onOpen={setDetailKey} />
@@ -582,7 +585,7 @@ function FYOutstandingCard({ bills, asOn, onDrill }) {
           <span className="text-xs text-muted">dues from completed financial years</span>
         </div>
         {current && (
-          <div className="text-right">
+          <div className="text-right flex flex-col items-end">
             <span className="text-xs font-medium text-muted uppercase tracking-wide">FY {current.label} (current)</span>
             <button onClick={() => onDrill({ title: `FY ${current.label} — bills`, bills: bills.filter((b) => b.outstanding > 0 && fyStartYear(b.date) === curStart) })}
               className="text-lg font-display font-bold text-ink mt-0.5 underline decoration-dotted underline-offset-4 decoration-muted/60">{inr(current.amount)}</button>
