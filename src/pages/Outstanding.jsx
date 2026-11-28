@@ -11,6 +11,7 @@ import { pullState, pushState, isSetupError, uploadStatement } from "../services
 import Modal from "../components/Modal.jsx";
 import { SummaryTab, BillsTab, MonthTab, PriorityTab, MovementTab } from "./outstandingReports.jsx";
 import InsightsTab from "./outstandingInsights.jsx";
+import PaymentPlanTab from "./outstandingPlan.jsx";
 import DrillModal from "./outstandingDrill.jsx";
 import CollectionsTab from "./outstandingCollections.jsx";
 import TrackerTab from "./outstandingTracker.jsx";
@@ -41,6 +42,7 @@ const TABS = [
   { id: "bills", label: "Bill-wise Ageing" },
   { id: "month", label: "Month-wise" },
   { id: "priority", label: "Collection Priority" },
+  { id: "plan", label: "Payment Plan" },
   { id: "movement", label: "Movement" },
   { id: "insights", label: "Insights" },
   { id: "tracker", label: "Payment Tracker" },
@@ -306,6 +308,11 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
   };
   const toggleDiff = (id) => writeDiffs((settings.diffs || []).map((d) => (d.id === id ? { ...d, status: d.status === "closed" ? "open" : "closed", closedOn: d.status === "closed" ? "" : todayIso() } : d)));
   const delDiff = (id) => { writeDiffs((settings.diffs || []).filter((d) => d.id !== id)); setDiffModal(null); };
+  // ----- payment plan for customers beyond N days (settings.payPlan, synced like the other settings) -----
+  const setPlan = (key, name, patch) => {
+    const all = settings.payPlan || {};
+    updateSettings({ ...settings, payPlan: { ...all, [key]: { ...(all[key] || {}), name, ...patch, updatedAt: todayIso() } } });
+  };
   const diffsOfParty = (key) => (settings.diffs || []).filter((d) => partyKey(d.party) === key);
 
   const lockMsg = () => showToast("Back-dated view is for viewing only — set the date back to the report date to send statements.", "info");
@@ -503,6 +510,7 @@ function OutstandingSource({ source, sourceBar, onUpdate }) {
         <CollectionsTab groups={groupParties(snapRaw.bills)} coll={coll} updateColl={updateColl} company={company} showToast={showToast} />
       )}
       {tab === "differences" && <DifferencesTab items={snapD.diffs || []} totals={diffTotals} bills={snap.bills} asOn={snap.asOn} onAdd={() => setDiffModal({})} onReport={() => setReportOpen(true)} onEdit={(d) => setDiffModal({ item: d })} onToggle={toggleDiff} onDelete={(d) => { if (window.confirm(`Delete this ${d.type} entry for ${d.party}?`)) delDiff(d.id); }} />}
+      {tab === "plan" && <PaymentPlanTab bills={snapD.bills} asOn={snap.asOn} company={company} days={settings.planDays || 120} onDays={(n) => updateSettings({ ...settings, planDays: n })} plan={settings.payPlan || {}} onChange={setPlan} showToast={showToast} />}
       {tab === "insights" && <InsightsTab snap={snapF} history={snapRaw.history || []} settings={settings} coll={coll} claims={(snapD.diffs || []).filter((d) => d.status !== "closed")} source={source} />}
       {tab === "movement" && <MovementTab snap={snapRaw} company={company} filterNote={fNote} onOpen={setDetailKey} />}
       {tab === "tracker" && (
